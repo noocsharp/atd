@@ -15,4 +15,5 @@ struct command {
 
 struct data_dial {
     char num[20];
+    size_t count;
 };

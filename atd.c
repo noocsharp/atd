@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <poll.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -6,9 +7,9 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/signalfd.h>
-#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <unistd.h>
 
 #include "atd.h"
 #include "util.h"
@@ -38,99 +39,64 @@ struct {
 } atq;
 
 struct fdbuf {
-    ssize_t len;
-    char buf[BUFSIZE];
-    char *ptr;
+    ssize_t inlen;
+    ssize_t outlen;
+    char in[BUFSIZE]; /* stuff that needs to go *into* the fd */
+    char out[BUFSIZE]; /* stuff that came out *from* the fd */
+    char *inptr;
+    char *outptr;
 };
 
-int at_enqueue(char *cmd)
-{
-    if (atq.count != 0 && atq.start == atq.next) {
-        fprintf(stderr, "command queue full");
-        free(cmd);
-        return 1;
-    }
+/* add one command to queue, returns 0 if command was validated and added successfully, -1 if the command is invalid but terminated, and -2 if the command is invalid and unterminated. Then sets next to point after the command */
+/* TODO what if queue is full? */
+ssize_t cmdadd(struct fdbuf fdbuf) {
+    struct command cmd;
+    char *end = memchr(fdbuf.out, '\0', fdbuf.outlen);
+    char *ptr = fdbuf.out;
+    size_t count = 0;
 
-    *atq.next = cmd;
-    atq.next = (char **)((atq.next + 1 - atq.ptrs) % QUEUE_MAX);
-    atq.count++;
-    return 0;
-}
+    /* given that we have a max length for a command, if the buffer does not contain a terminated command, we can assume that the command is incomplete and read mode data from the fd until the buffer is full. If it still doesn't contain a terminated command, then we know that we are dealing with garbage, and we throw it out, and inform the client. In case of garbage, two '\0' in a row flush the buffer */
+    if (end == NULL)
+        return -2;
 
-int cmd_call(const char *buf)
-{
-    char num[PHONE_NUMBER_MAX_LEN];
-    char *command;
-    size_t numlen = 0;
+    switch (*(ptr++)) {
+    case CMD_DIAL:
+        cmd.op = CMD_DIAL;
+        /* TODO replace this malloc */
+        cmd.data = malloc(sizeof(struct data_dial));
+        if (cmd.data == NULL)
+            goto bad;
+        while (*ptr != '\0') {
+            if (count > PHONE_NUMBER_MAX_LEN || strchr(DIALING_DIGITS, *ptr) == NULL)
+                goto bad;
 
-    buf += 1;
-    while (buf) {
-        num[numlen++] = *buf;
-    }
-
-    /* TODO don't use malloc here */
-    command = malloc(numlen + 5);
-    if (!command)
-        return 1;
-
-    /* ATD is used to initiate a phone call */
-    if (snprintf(command, AT_MAX, "ATD%s;", num) > AT_MAX) {
-        free(command);
-        return 1;
-    }
-
-    return at_enqueue(command);
-}
-
-int cmd_answer() {
-    char *command = malloc(4);
-    if (!command)
-        return 1;
-
-    strcpy(command, "ATA");
-
-    return at_enqueue(command);
-}
-
-int cmd_hangup() {
-    char *command = malloc(4);
-    if (!command)
-        return 1;
-
-    strcpy(command, "ATH");
-
-    return at_enqueue(command);
-}
-
-int dispatch(const char *buf)
-{
-    switch (buf[0]) {
-        case CMD_DIAL: return cmd_call(buf);
-        case CMD_ANSWER: return cmd_answer(buf);
-        case CMD_HANGUP: return cmd_hangup(buf);
-    }
-}
-
-/* caller is responsible for freeing */
-char *at_sendnext(int fd)
-{
-    char *cmd = *atq.start;
-    size_t left = strlen(cmd);
-    ssize_t ret;
-    while (left) {
-        ret = write(fd, cmd, left);
-        if (ret == -1) {
-            fprintf(stderr, "failed write when sending command %s", cmd);
-            return NULL;
+            ((struct data_dial *)cmd.data)->num[count] = *(ptr++);
+            count++;
         }
-        cmd += ret;
-        left -= ret;
+        ((struct data_dial *)cmd.data)->count = count;
+        
+        fprintf(stderr, "received dial with number ");
+        for (int i = 0; i < count; i++)
+            fputc(((struct data_dial *)cmd.data)->num[i], stderr);
+        fputc('\n', stderr);
+        break;
+    case CMD_ANSWER:
+        ptr++;
+        if (*ptr != '\0')
+            goto bad;
+        fprintf(stderr, "received answer\n");
+    case CMD_HANGUP:
+        ptr++;
+        if (*ptr != '\0')
+            goto bad;
+        fprintf(stderr, "received answer\n");
     }
 
-    cmd = *atq.start;
-    atq.start = (char **)((atq.start + 1 - atq.ptrs) % QUEUE_MAX);
-    atq.count--;
-    return cmd;
+    return ptr - fdbuf.out;
+
+bad:
+    fdbuf.outptr = end + 1;
+    return -1;
 }
 
 int main(int argc, char *argv[])
@@ -147,9 +113,10 @@ int main(int argc, char *argv[])
         .sun_path = "/tmp/atsim",
     };
 
-    ssize_t len = 0, written = 0;
+    ssize_t len = 0, written = 0, ret = 0;
     struct pollfd fds[MAX_FDS];
     sigset_t mask;
+    char *next;
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
@@ -208,55 +175,77 @@ int main(int argc, char *argv[])
         }
 
         /* handle interrupt */
-        if ((fds[SIGNALINT].revents & POLLIN) || (fds[LISTENER].revents & SIGHUP)) {
+        if ((fds[SIGNALINT].revents & POLLIN) || fds[LISTENER].revents & POLLHUP) {
             warn("time to die");
             break;
         }
 
         for (int i = RSRVD_FDS; i < MAX_FDS; i++) {
+            if (fds[i].fd == -1)
+                continue;
+
             if (fds[i].revents & POLLHUP) {
+                /* TODO check if out buffer is empty */
+                warn("closed connection!");
                 close(fds[i].fd);
                 fds[i].fd = -1;
             } else if (fds[i].revents & POLLIN) {
-                /* TODO not this */
-                close(fds[i].fd);
-                fds[i].fd = -1;
+                len = read(fds[i].fd, fdbufs[i].outptr, BUFSIZE - fdbufs[i].outlen);
+                if (len == -1) {
+                    warn("failed to read from fd %d:", i);
+                    break;
+                }
+
+                fdbufs[i].outlen += len;
+                fdbufs[i].outptr += len;
+                // parsecmd should parse as much as it can, letting us know how much was left unparsed so we can move it to the beginning of the buffer.
+                len = cmdadd(fdbufs[i]);
+                if (len == -2) {
+                    continue;
+                } else if (len == -1) {
+                    // TODO mark paused
+                } else {
+                    assert(len <= BUFSIZE);
+                    fdbufs[i].outlen -= len;
+                    memmove(fdbufs[i].out, fdbufs[i].out + len, fdbufs[i].outlen);
+                    assert(fdbufs[i].outlen >= 0);
+                    fdbufs[i].outptr = fdbufs[i].out + fdbufs[i].outlen;
+                }
             }
         }
 
         /* TODO hook stdin up to command input? */
         if (fds[STDIN].revents & POLLIN) {
-            len = read(fds[STDIN].fd, &fdbufs[STDIN].buf, BUFSIZE);
+            len = read(fds[STDIN].fd, &fdbufs[STDIN].out, BUFSIZE);
             if (len == -1) {
                 warn("failed to read from stdin");
                 break;
             }
 
-            fdbufs[STDIN].len = len;
-            fdbufs[STDIN].ptr = fdbufs[STDIN].buf;
+            fdbufs[STDIN].outlen = len;
+            fdbufs[STDIN].outptr = fdbufs[STDIN].out;
             fds[STDIN].events &= ~POLLIN;
             fds[STDOUT].events |= POLLOUT;
         }
 
         /* TODO write to stdout when a command is received */
         if (fds[STDOUT].revents & POLLOUT) {
-            int wr = write(fds[STDOUT].fd, &fdbufs[STDIN].buf, fdbufs[STDIN].len);
+            int wr = write(fds[STDOUT].fd, &fdbufs[STDIN].out, fdbufs[STDIN].outlen);
             if (wr == -1) {
                 warn("failed to write to stdout");
                 break;
             }
 
-            fdbufs[STDIN].len -= wr;
-
-            fdbufs[BACKEND].len -= wr;
-            fdbufs[STDIN].ptr += wr;
-            if (fdbufs[STDIN].len == 0) {
+            fdbufs[STDIN].outlen -= wr;
+            fdbufs[STDIN].outptr += wr;
+            if (fdbufs[STDIN].outlen == 0) {
                 fds[STDOUT].events &= ~POLLOUT;
                 fds[STDIN].events |= POLLIN;
             }
         }
 
         if (fds[LISTENER].revents & POLLIN) {
+            /* TODO come up with a better way of assigning indices? */
             for (int i = RSRVD_FDS; i < MAX_FDS; i++) {
                 if (fds[i].fd != -1)
                     continue;
@@ -267,7 +256,8 @@ int main(int argc, char *argv[])
                     break;
                 }
                 fds[i].events = POLLIN;
-                warn("accepted connection!");
+                fdbufs[i].outptr = fdbufs[i].out;
+                warn("accepted connection!", fds[i].fd);
                 break;
             }
         }

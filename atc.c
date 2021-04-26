@@ -15,6 +15,8 @@ call(int fd, char *num)
         ret = write(fd, &callcode, 1);
         if (ret == -1)
             return -1;
+        if (ret == 1)
+            break;
     } while (ret);
 
     do {
@@ -24,6 +26,15 @@ call(int fd, char *num)
         num += ret;
         left -= ret;
     } while (left);
+
+    do {
+        ret = write(fd, &"\0", 1);
+        if (ret == -1)
+            return -1;
+        if (ret == 1)
+            break;
+    } while (ret);
+    
 
     return 0;
 }
@@ -62,6 +73,15 @@ main(int argc, char *argv[])
         close(sock);
         return 1;
     }
+
+    fprintf(stderr, "confd: %d\n", sock);
+
+    switch (cmd) {
+    case CMD_DIAL:
+        call(sock, argv[2]);
+    }
+
+    sleep(5);
 
     close(con);
     close(sock);

@@ -70,3 +70,13 @@ eunveil(const char *path, const char *permissions)
 	}
 #endif /* __OpenBSD__ */
 }
+
+void *
+xmalloc(size_t size)
+{
+    void *m;
+    if ((m = malloc(size)) == NULL)
+        die("malloc failed:");
+
+    return m;
+}
