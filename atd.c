@@ -148,8 +148,7 @@ int main(int argc, char *argv[])
         goto error;
     }
 
-    int back = connect(backsock, (struct sockaddr *) &backaddr, sizeof(struct sockaddr_un));
-    if (back == -1) {
+    if (connect(backsock, (struct sockaddr *) &backaddr, sizeof(struct sockaddr_un)) == -1) {
         warn("failed to connect to backend:");
         goto error;
     }
@@ -177,7 +176,7 @@ int main(int argc, char *argv[])
     fds[STDOUT].events = 0;
     fds[LISTENER].fd = sock;
     fds[LISTENER].events = POLLIN;
-    fds[BACKEND].fd = back;
+    fds[BACKEND].fd = backsock;
     fds[BACKEND].events = 0;
     fds[SIGNALINT].fd = sigintfd;
     fds[SIGNALINT].events = POLLIN;
@@ -188,7 +187,7 @@ int main(int argc, char *argv[])
             break;
         }
 
-        if ((fds[SIGNALINT].revents & POLLIN) || fds[LISTENER].revents & POLLHUP) {
+        if ((fds[SIGNALINT].revents & POLLIN) || (fds[LISTENER].revents & POLLHUP) || (fds[BACKEND].revents & POLLHUP)) {
             warn("time to die");
             break;
         }
