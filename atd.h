@@ -9,11 +9,13 @@ enum ops {
 };
 
 struct command {
+    int index;
     enum ops op;
     void *data;
 };
 
-struct data_dial {
-    char num[20];
-    size_t count;
+char *cmd_to_at[] = {
+    [CMD_DIAL] = "ATD%s;",
+    [CMD_ANSWER] = "ATA\r\n",
+    [CMD_HANGUP] = "ATH\r\n",
 };

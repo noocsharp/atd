@@ -13,6 +13,7 @@
 
 #include "atd.h"
 #include "util.h"
+#include "queue.h"
 
 #define AT_MAX 256
 #define ATD_SOCKET "/tmp/atd-socket"
@@ -31,13 +32,6 @@
 
 char *argv0;
 
-struct {
-    char *ptrs[QUEUE_MAX];
-    char **start;
-    char **next;
-    size_t count;
-} atq;
-
 struct fdbuf {
     ssize_t inlen;
     ssize_t outlen;
@@ -47,7 +41,10 @@ struct fdbuf {
     char *outptr;
 };
 
-/* add one command to queue, returns 0 if command was validated and added successfully, -1 if the command is invalid but terminated, and -2 if the command is invalid and unterminated. Then sets next to point after the command */
+/* add one command to queue, returns the number of bytes intepreted if the
+ * command was validated and added successfully, -1 if the queue is full, -2 if
+ * the command is invalid but terminated, and -3 if the command is invalid and
+ * unterminated */
 /* TODO what if queue is full? */
 ssize_t cmdadd(struct fdbuf fdbuf) {
     struct command cmd;
@@ -55,48 +52,59 @@ ssize_t cmdadd(struct fdbuf fdbuf) {
     char *ptr = fdbuf.out;
     size_t count = 0;
 
-    /* given that we have a max length for a command, if the buffer does not contain a terminated command, we can assume that the command is incomplete and read mode data from the fd until the buffer is full. If it still doesn't contain a terminated command, then we know that we are dealing with garbage, and we throw it out, and inform the client. In case of garbage, two '\0' in a row flush the buffer */
+    if (cmdq.count == QUEUE_SIZE)
+        return -1;
+
+    /* given that we have a max length for a command, if the buffer does not
+     * contain a terminated command, we can assume that the command is
+     * incomplete and read more data from the fd until the buffer is full. If
+     * it still doesn't contain a terminated command, then we know that we are
+     * dealing with garbage, and we throw it out, and inform the client. In
+     * case of garbage, two '\0' in a row flush the buffer */
     if (end == NULL)
-        return -2;
+        return -3;
 
     switch (*(ptr++)) {
     case CMD_DIAL:
         cmd.op = CMD_DIAL;
         /* TODO replace this malloc */
-        cmd.data = malloc(sizeof(struct data_dial));
-        if (cmd.data == NULL)
-            goto bad;
+        char num[PHONE_NUMBER_MAX_LEN];
         while (*ptr != '\0') {
             if (count > PHONE_NUMBER_MAX_LEN || strchr(DIALING_DIGITS, *ptr) == NULL)
                 goto bad;
 
-            ((struct data_dial *)cmd.data)->num[count] = *(ptr++);
+            num[count] = *(ptr++);
             count++;
         }
-        ((struct data_dial *)cmd.data)->count = count;
+
+        cmd.data = malloc(count + 1);
+        if (cmd.data == NULL)
+            goto bad;
+
+        memcpy(cmd.data, num, count);
+        ((char*)cmd.data)[count] = '\0';
         
-        fprintf(stderr, "received dial with number ");
-        for (int i = 0; i < count; i++)
-            fputc(((struct data_dial *)cmd.data)->num[i], stderr);
-        fputc('\n', stderr);
+        fprintf(stderr, "received dial with number %s\n", cmd.data);
         break;
     case CMD_ANSWER:
-        ptr++;
         if (*ptr != '\0')
             goto bad;
         fprintf(stderr, "received answer\n");
+        break;
     case CMD_HANGUP:
-        ptr++;
         if (*ptr != '\0')
             goto bad;
-        fprintf(stderr, "received answer\n");
+        fprintf(stderr, "received hangup\n");
+        break;
+    default:
+        fprintf(stderr, "got code: %d\n", *(ptr - 1));
     }
 
     return ptr - fdbuf.out;
 
 bad:
     fdbuf.outptr = end + 1;
-    return -1;
+    return -2;
 }
 
 int main(int argc, char *argv[])
@@ -135,26 +143,32 @@ int main(int argc, char *argv[])
         fds[i].fd = -1;
 
     int backsock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (backsock == -1)
-        die("failed to create backend socket:");
+    if (backsock == -1) {
+        warn("failed to create backend socket:");
+        goto error;
+    }
 
     int back = connect(backsock, (struct sockaddr *) &backaddr, sizeof(struct sockaddr_un));
     if (back == -1) {
-        die("failed to connect to backend:");
+        warn("failed to connect to backend:");
+        goto error;
     }
 
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock == -1) {
-        die("failed to create socket:");
+        warn("failed to create socket:");
+        goto error;
     }
 
     /* TODO replace these dies with warns and gotos so the socket file gets removed properly */
     if (bind(sock, (struct sockaddr *) &sockaddr, sizeof(struct sockaddr_un)) == -1) {
-        die("failed to bind to socket:");
+        warn("failed to bind to socket:");
+        goto error;
     }
 
     if (listen(sock, 50) == -1) {
-        die("failed to set socket to listening:");
+        warn("failed to set socket to listening:");
+        goto error;
     }
 
     fds[STDIN].fd = STDIN;
@@ -174,7 +188,6 @@ int main(int argc, char *argv[])
             break;
         }
 
-        /* handle interrupt */
         if ((fds[SIGNALINT].revents & POLLIN) || fds[LISTENER].revents & POLLHUP) {
             warn("time to die");
             break;
@@ -198,7 +211,9 @@ int main(int argc, char *argv[])
 
                 fdbufs[i].outlen += len;
                 fdbufs[i].outptr += len;
-                // parsecmd should parse as much as it can, letting us know how much was left unparsed so we can move it to the beginning of the buffer.
+                // parsecmd should parse as much as it can, letting us know how
+                // much was left unparsed so we can move it to the beginning of
+                // the buffer.
                 len = cmdadd(fdbufs[i]);
                 if (len == -2) {
                     continue;
@@ -263,8 +278,9 @@ int main(int argc, char *argv[])
         }
     }
 
-    for (int i = 0; i < MAX_FDS; i++) {
-        if (fds[i].fd > STDERR)
+error:
+    for (int i = STDERR+1; i < MAX_FDS; i++) {
+        if (fds[i].fd > 0)
             close(fds[i].fd);
     }
     unlink(ATD_SOCKET);

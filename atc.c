@@ -7,12 +7,33 @@
 #include "atd.h"
 
 int
-call(int fd, char *num)
+sendcode(int fd, int code)
 {
-    char callcode = CMD_DIAL;
+    int ret, left = 2;
+    char buf[2];
+    char *ptr = buf;
+    buf[0] = code;
+    buf[1] = '\0';
+
+    while (left > 0) {
+        ret = write(fd, ptr, left);
+        if (ret == -1)
+            return -1;
+
+        ptr += ret;
+        left -= ret;
+    }
+
+    return 0;
+}
+
+int
+dial(int fd, char *num)
+{
+    char dialcode = CMD_DIAL;
     int ret, left = strlen(num);
     do {
-        ret = write(fd, &callcode, 1);
+        ret = write(fd, &dialcode, 1);
         if (ret == -1)
             return -1;
         if (ret == 1)
@@ -50,10 +71,9 @@ main(int argc, char *argv[])
     if (argc < 2)
         return 1;
 
-    if (strcmp(argv[1], "call") == 0) {
+    if (strcmp(argv[1], "dial") == 0) {
         if (argc < 3)
             return 1;
-
         cmd = CMD_DIAL;
     } else if (strcmp(argv[1], "answer") == 0) {
         cmd = CMD_ANSWER;
@@ -78,10 +98,14 @@ main(int argc, char *argv[])
 
     switch (cmd) {
     case CMD_DIAL:
-        call(sock, argv[2]);
+        dial(sock, argv[2]);
+        break;
+    default:
+        sendcode(sock, cmd);
+        break;
     }
 
-    sleep(5);
+    sleep(1);
 
     close(con);
     close(sock);
