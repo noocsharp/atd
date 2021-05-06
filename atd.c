@@ -45,7 +45,6 @@ struct fdbuf {
  * command was validated and added successfully, -1 if the queue is full, -2 if
  * the command is invalid but terminated, and -3 if the command is invalid and
  * unterminated */
-/* TODO what if queue is full? */
 ssize_t cmdadd(struct fdbuf fdbuf) {
     struct command cmd;
     char *end = memchr(fdbuf.out, '\0', fdbuf.outlen);
@@ -67,7 +66,6 @@ ssize_t cmdadd(struct fdbuf fdbuf) {
     switch (*(ptr++)) {
     case CMD_DIAL:
         cmd.op = CMD_DIAL;
-        /* TODO replace this malloc */
         char num[PHONE_NUMBER_MAX_LEN];
         while (*ptr != '\0') {
             if (count > PHONE_NUMBER_MAX_LEN || strchr(DIALING_DIGITS, *ptr) == NULL)
@@ -159,7 +157,6 @@ int main(int argc, char *argv[])
         goto error;
     }
 
-    /* TODO replace these dies with warns and gotos so the socket file gets removed properly */
     if (bind(sock, (struct sockaddr *) &sockaddr, sizeof(struct sockaddr_un)) == -1) {
         warn("failed to bind to socket:");
         goto error;
