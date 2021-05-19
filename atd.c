@@ -46,7 +46,7 @@ struct fdbuf {
  * the command is invalid but terminated, and -3 if the command is invalid and
  * unterminated */
 ssize_t cmdadd(struct fdbuf fdbuf) {
-    struct command cmd;
+    struct command cmd = {0, CMD_NONE, NULL};
     char *end = memchr(fdbuf.out, '\0', fdbuf.outlen);
     char *ptr = fdbuf.out;
     size_t count = 0;
@@ -63,9 +63,9 @@ ssize_t cmdadd(struct fdbuf fdbuf) {
     if (end == NULL)
         return -3;
 
-    switch (*(ptr++)) {
+    cmd.op = *(ptr++);
+    switch (cmd.op) {
     case CMD_DIAL:
-        cmd.op = CMD_DIAL;
         char num[PHONE_NUMBER_MAX_LEN];
         while (*ptr != '\0') {
             if (count > PHONE_NUMBER_MAX_LEN || strchr(DIALING_DIGITS, *ptr) == NULL)
@@ -90,6 +90,7 @@ ssize_t cmdadd(struct fdbuf fdbuf) {
         fprintf(stderr, "received answer\n");
         break;
     case CMD_HANGUP:
+        fprintf(stderr, "received hangup\n");
         if (*ptr != '\0')
             goto bad;
         fprintf(stderr, "received hangup\n");
@@ -98,11 +99,29 @@ ssize_t cmdadd(struct fdbuf fdbuf) {
         fprintf(stderr, "got code: %d\n", *(ptr - 1));
     }
 
+    /* we already checked that the queue has enough capacity */
+    command_enqueue(cmd);
+
     return ptr - fdbuf.out;
 
 bad:
     fdbuf.outptr = end + 1;
     return -2;
+}
+
+size_t
+handle_resp(struct fdbuf *fdbuf)
+{
+    fprintf(stderr, "got here\n");
+    char *ptr = strchr(fdbuf->outptr, '\n');
+    size_t len;
+    if (ptr) {
+        len = ptr - fdbuf->outptr;
+        fprintf(stderr, "response: %*.*s\n", len, len, fdbuf->outptr);
+        return len;
+    }
+
+    return 0;
 }
 
 int main(int argc, char *argv[])
@@ -174,7 +193,8 @@ int main(int argc, char *argv[])
     fds[LISTENER].fd = sock;
     fds[LISTENER].events = POLLIN;
     fds[BACKEND].fd = backsock;
-    fds[BACKEND].events = 0;
+    fds[BACKEND].events = POLLIN;
+    fdbufs[BACKEND].outptr = fdbufs[BACKEND].out;
     fds[SIGNALINT].fd = sigintfd;
     fds[SIGNALINT].events = POLLIN;
 
@@ -216,11 +236,13 @@ int main(int argc, char *argv[])
                 } else if (len == -1) {
                     // TODO mark paused
                 } else {
+                    fprintf(stderr, "got here\n");
                     assert(len <= BUFSIZE);
                     fdbufs[i].outlen -= len;
                     memmove(fdbufs[i].out, fdbufs[i].out + len, fdbufs[i].outlen);
                     assert(fdbufs[i].outlen >= 0);
                     fdbufs[i].outptr = fdbufs[i].out + fdbufs[i].outlen;
+                    fds[BACKEND].events |= POLLOUT;
                 }
             }
         }
@@ -253,6 +275,57 @@ int main(int argc, char *argv[])
                 fds[STDOUT].events &= ~POLLOUT;
                 fds[STDIN].events |= POLLIN;
             }
+        }
+
+        /* send next command to modem */
+        if (cmdq.count && (fds[BACKEND].revents & POLLOUT)) {
+            fprintf(stderr, "have a command!\n");
+            struct command cmd = command_dequeue();
+            size_t len;
+            fprintf(stderr, "op: %d\n", cmd.op);
+
+            if (!cmd.op)
+                continue;
+
+            if (cmd.data) {
+                len = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op], cmd.data);
+            } else {
+                len = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op]);
+            }
+            fprintf(stderr, "after data\n");
+            if (len >= BUFSIZE) {
+                warn("AT command too long!");
+                break;
+            }
+            fdbufs[BACKEND].inptr = fdbufs[BACKEND].in;
+            fdbufs[BACKEND].inlen = len;
+            int wr = write(fds[BACKEND].fd, fdbufs[BACKEND].inptr, fdbufs[BACKEND].inlen);
+            if (wr == -1) {
+                warn("failed to write to backend!");
+                break;
+            }
+            fdbufs[BACKEND].inptr += wr;
+            fdbufs[BACKEND].inlen -= wr;
+            fprintf(stderr, "done writing\n");
+
+            /* don't write any more until we hear back */
+            if (fdbufs[BACKEND].inlen == 0) {
+                fds[BACKEND].events &= ~POLLOUT;
+                fds[BACKEND].events &= POLLIN;
+            }
+        }
+
+        if (fds[BACKEND].revents & POLLIN) {
+            fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
+            int ret = read(fds[BACKEND].fd, fdbufs[BACKEND].outptr, BUFSIZE - fdbufs[BACKEND].outlen);
+            if (ret == -1) {
+                warn("failed to read from backend:");
+                break;
+            }
+
+            fdbufs[BACKEND].outlen += ret;
+            ret = handle_resp(&fdbufs[BACKEND]);
+            memmove(fdbufs[BACKEND].outptr, fdbufs[BACKEND].outptr + ret + 1, BUFSIZE - (ret + 1));
         }
 
         if (fds[LISTENER].revents & POLLIN) {

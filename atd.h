@@ -15,7 +15,7 @@ struct command {
 };
 
 char *cmd_to_at[] = {
-    [CMD_DIAL] = "ATD%s;",
+    [CMD_DIAL] = "ATD%s;\r\n",
     [CMD_ANSWER] = "ATA\r\n",
     [CMD_HANGUP] = "ATH\r\n",
 };
