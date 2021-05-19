@@ -11,7 +11,11 @@ enum ops {
 struct command {
     int index;
     enum ops op;
-    void *data;
+    union {
+        struct {
+            char *num;
+        } dial;
+    } data;
 };
 
 char *cmd_to_at[] = {

@@ -75,12 +75,12 @@ ssize_t cmdadd(struct fdbuf fdbuf) {
             count++;
         }
 
-        cmd.data = malloc(count + 1);
-        if (cmd.data == NULL)
+        cmd.data.dial.num = malloc(count + 1);
+        if (cmd.data.dial.num == NULL)
             goto bad;
 
-        memcpy(cmd.data, num, count);
-        ((char*)cmd.data)[count] = '\0';
+        memcpy(cmd.data.dial.num, num, count);
+        ((char*)cmd.data.dial.num)[count] = '\0';
         
         fprintf(stderr, "received dial with number %s\n", cmd.data);
         break;
@@ -287,8 +287,8 @@ int main(int argc, char *argv[])
             if (!cmd.op)
                 continue;
 
-            if (cmd.data) {
-                len = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op], cmd.data);
+            if (cmd.op == CMD_DIAL) {
+                len = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op], cmd.data.dial.num);
             } else {
                 len = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op]);
             }
