@@ -71,7 +71,6 @@ int main() {
                 return 1;
             }
             write(STDOUT, fromsock, ret);
-            fds[STDIN].events |= POLLIN;
         }
 
         if (fds[SOCKFD].revents & POLLOUT) {
@@ -86,7 +85,7 @@ int main() {
             fprintf(stderr, "tocount: %d\n", tocount);
             if (tocount == 0) {
                 fds[SOCKFD].events &= ~POLLOUT;
-                fds[SOCKFD].events &= POLLIN;
+                fds[SOCKFD].events |= POLLIN;
             }
         }
 

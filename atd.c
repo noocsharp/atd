@@ -142,6 +142,7 @@ int main(int argc, char *argv[])
     struct pollfd fds[MAX_FDS];
     sigset_t mask;
     char *next;
+    bool active_command = false;
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
@@ -242,7 +243,6 @@ int main(int argc, char *argv[])
                     memmove(fdbufs[i].out, fdbufs[i].out + len, fdbufs[i].outlen);
                     assert(fdbufs[i].outlen >= 0);
                     fdbufs[i].outptr = fdbufs[i].out + fdbufs[i].outlen;
-                    fds[BACKEND].events |= POLLOUT;
                 }
             }
         }
@@ -277,8 +277,28 @@ int main(int argc, char *argv[])
             }
         }
 
+        if (fds[BACKEND].revents & POLLIN) {
+            fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
+            int ret = read(fds[BACKEND].fd, fdbufs[BACKEND].outptr, BUFSIZE - fdbufs[BACKEND].outlen);
+            if (ret == -1) {
+                warn("failed to read from backend:");
+                break;
+            }
+
+            fdbufs[BACKEND].outlen += ret;
+            ret = handle_resp(&fdbufs[BACKEND]);
+            memmove(fdbufs[BACKEND].outptr, fdbufs[BACKEND].outptr + ret + 1, BUFSIZE - (ret + 1));
+            /* TODO: temporary, only change this if it is a response to the command */
+            active_command = false;
+        }
+
+        if (cmdq.count && !active_command)
+            fds[BACKEND].events |= POLLOUT;
+        else
+            fds[BACKEND].events &= ~POLLOUT;
+
         /* send next command to modem */
-        if (cmdq.count && (fds[BACKEND].revents & POLLOUT)) {
+        if (fds[BACKEND].revents & POLLOUT) {
             fprintf(stderr, "have a command!\n");
             struct command cmd = command_dequeue();
             size_t len;
@@ -306,26 +326,14 @@ int main(int argc, char *argv[])
             }
             fdbufs[BACKEND].inptr += wr;
             fdbufs[BACKEND].inlen -= wr;
-            fprintf(stderr, "done writing\n");
+            fprintf(stderr, "done writing: %d\n", fdbufs[BACKEND].inlen);
+            active_command = true;
 
             /* don't write any more until we hear back */
             if (fdbufs[BACKEND].inlen == 0) {
                 fds[BACKEND].events &= ~POLLOUT;
-                fds[BACKEND].events &= POLLIN;
+                fds[BACKEND].events |= POLLIN;
             }
-        }
-
-        if (fds[BACKEND].revents & POLLIN) {
-            fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
-            int ret = read(fds[BACKEND].fd, fdbufs[BACKEND].outptr, BUFSIZE - fdbufs[BACKEND].outlen);
-            if (ret == -1) {
-                warn("failed to read from backend:");
-                break;
-            }
-
-            fdbufs[BACKEND].outlen += ret;
-            ret = handle_resp(&fdbufs[BACKEND]);
-            memmove(fdbufs[BACKEND].outptr, fdbufs[BACKEND].outptr + ret + 1, BUFSIZE - (ret + 1));
         }
 
         if (fds[LISTENER].revents & POLLIN) {
