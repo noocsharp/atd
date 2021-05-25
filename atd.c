@@ -274,36 +274,6 @@ int main(int argc, char *argv[])
             }
         }
 
-        /* TODO hook stdin up to command input? */
-        if (fds[STDIN].revents & POLLIN) {
-            ret = read(fds[STDIN].fd, &fdbufs[STDIN].out, BUFSIZE);
-            if (ret == -1) {
-                warn("failed to read from stdin");
-                break;
-            }
-
-            fdbufs[STDIN].outlen = ret;
-            fdbufs[STDIN].outptr = fdbufs[STDIN].out;
-            POLLADD(fds[STDOUT], POLLOUT);
-            POLLDROP(fds[STDIN], POLLIN);
-        }
-
-        /* TODO write to stdout when a command is received */
-        if (fds[STDOUT].revents & POLLOUT) {
-            ret = write(fds[STDOUT].fd, &fdbufs[STDIN].out, fdbufs[STDIN].outlen);
-            if (ret == -1) {
-                warn("failed to write to stdout");
-                break;
-            }
-
-            fdbufs[STDIN].outlen -= ret;
-            fdbufs[STDIN].outptr += ret;
-            if (fdbufs[STDIN].outlen == 0) {
-                POLLDROP(fds[STDOUT], POLLOUT);
-                POLLADD(fds[STDIN], POLLIN);
-            }
-        }
-
         if (fds[BACKEND].revents & POLLIN) {
             fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
             ret = fdbuf_read(fds[BACKEND].fd, &fdbufs[BACKEND]);
