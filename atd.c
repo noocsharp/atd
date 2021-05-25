@@ -168,7 +168,7 @@ int main(int argc, char *argv[])
         .sun_path = "/tmp/atsim",
     };
 
-    ssize_t len = 0, written = 0, ret = 0;
+    ssize_t ret = 0;
     struct pollfd fds[MAX_FDS];
     sigset_t mask;
     char *next;
@@ -250,24 +250,24 @@ int main(int argc, char *argv[])
                 close(fds[i].fd);
                 fds[i].fd = -1;
             } else if (fds[i].revents & POLLIN) {
-                len = fdbuf_read(fds[i].fd, &fdbufs[i]);
-                if (len == -1) {
+                ret = fdbuf_read(fds[i].fd, &fdbufs[i]);
+                if (ret == -1) {
                     warn("failed to read from fd %d:", i);
                     break;
                 }
                 // parsecmd should parse as much as it can, letting us know how
                 // much was left unparsed so we can move it to the beginning of
                 // the buffer.
-                len = cmdadd(fdbufs[i]);
-                if (len == -2) {
+                ret = cmdadd(fdbufs[i]);
+                if (ret == -2) {
                     continue;
-                } else if (len == -1) {
+                } else if (ret == -1) {
                     // TODO mark paused
                 } else {
                     fprintf(stderr, "got here\n");
-                    assert(len <= BUFSIZE);
-                    fdbufs[i].outlen -= len;
-                    memmove(fdbufs[i].out, fdbufs[i].out + len, fdbufs[i].outlen);
+                    assert(ret <= BUFSIZE);
+                    fdbufs[i].outlen -= ret;
+                    memmove(fdbufs[i].out, fdbufs[i].out + ret, fdbufs[i].outlen);
                     assert(fdbufs[i].outlen >= 0);
                     fdbufs[i].outptr = fdbufs[i].out + fdbufs[i].outlen;
                 }
@@ -276,13 +276,13 @@ int main(int argc, char *argv[])
 
         /* TODO hook stdin up to command input? */
         if (fds[STDIN].revents & POLLIN) {
-            len = read(fds[STDIN].fd, &fdbufs[STDIN].out, BUFSIZE);
-            if (len == -1) {
+            ret = read(fds[STDIN].fd, &fdbufs[STDIN].out, BUFSIZE);
+            if (ret == -1) {
                 warn("failed to read from stdin");
                 break;
             }
 
-            fdbufs[STDIN].outlen = len;
+            fdbufs[STDIN].outlen = ret;
             fdbufs[STDIN].outptr = fdbufs[STDIN].out;
             POLLADD(fds[STDOUT], POLLOUT);
             POLLDROP(fds[STDIN], POLLIN);
@@ -290,14 +290,14 @@ int main(int argc, char *argv[])
 
         /* TODO write to stdout when a command is received */
         if (fds[STDOUT].revents & POLLOUT) {
-            int wr = write(fds[STDOUT].fd, &fdbufs[STDIN].out, fdbufs[STDIN].outlen);
-            if (wr == -1) {
+            ret = write(fds[STDOUT].fd, &fdbufs[STDIN].out, fdbufs[STDIN].outlen);
+            if (ret == -1) {
                 warn("failed to write to stdout");
                 break;
             }
 
-            fdbufs[STDIN].outlen -= wr;
-            fdbufs[STDIN].outptr += wr;
+            fdbufs[STDIN].outlen -= ret;
+            fdbufs[STDIN].outptr += ret;
             if (fdbufs[STDIN].outlen == 0) {
                 POLLDROP(fds[STDOUT], POLLOUT);
                 POLLADD(fds[STDIN], POLLIN);
@@ -306,7 +306,7 @@ int main(int argc, char *argv[])
 
         if (fds[BACKEND].revents & POLLIN) {
             fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
-            int ret = fdbuf_read(fds[BACKEND].fd, &fdbufs[BACKEND]);
+            ret = fdbuf_read(fds[BACKEND].fd, &fdbufs[BACKEND]);
             if (ret == -1) {
                 warn("failed to read from backend:");
                 break;
@@ -327,24 +327,23 @@ int main(int argc, char *argv[])
         if (fds[BACKEND].revents & POLLOUT) {
             fprintf(stderr, "have a command!\n");
             struct command cmd = command_dequeue();
-            size_t len;
             fprintf(stderr, "op: %d\n", cmd.op);
 
             if (!cmd.op)
                 continue;
 
             if (cmd.op == CMD_DIAL) {
-                len = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op], cmd.data.dial.num);
+                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op], cmd.data.dial.num);
             } else {
-                len = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op]);
+                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op]);
             }
             fprintf(stderr, "after data\n");
-            if (len >= BUFSIZE) {
+            if (ret >= BUFSIZE) {
                 warn("AT command too long!");
                 break;
             }
             fdbufs[BACKEND].inptr = fdbufs[BACKEND].in;
-            fdbufs[BACKEND].inlen = len;
+            fdbufs[BACKEND].inlen = ret;
 
             int wr = fdbuf_write(fds[BACKEND].fd, &fdbufs[BACKEND]);
             if (wr == -1) {
