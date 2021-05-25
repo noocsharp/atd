@@ -40,7 +40,7 @@ struct fdbuf {
     ssize_t outlen;
     char in[BUFSIZE]; /* stuff that needs to go *into* the fd */
     char out[BUFSIZE]; /* stuff that came out *from* the fd */
-    char *inptr;
+    char *inptr; /* where to write new data to */
     char *outptr;
 };
 
@@ -116,15 +116,42 @@ size_t
 handle_resp(struct fdbuf *fdbuf)
 {
     fprintf(stderr, "got here\n");
-    char *ptr = strchr(fdbuf->outptr, '\n');
+    char *ptr = strchr(fdbuf->out, '\n');
     size_t len;
     if (ptr) {
-        len = ptr - fdbuf->outptr;
-        fprintf(stderr, "response: %*.*s\n", len, len, fdbuf->outptr);
+        len = ptr - fdbuf->out;
+        fprintf(stderr, "response: %*.*s\n", len, len, fdbuf->out);
         return len;
     }
 
     return 0;
+}
+
+ssize_t
+fdbuf_write(int fd, struct fdbuf *fdbuf)
+{
+    int wr = write(fd, &fdbuf->in, fdbuf->inlen);
+    if (wr == -1)
+        return -1;
+
+    fdbuf->inlen -= wr;
+    fdbuf->inptr -= wr;
+    memmove(fdbuf->in, fdbuf->in + wr, BUFSIZE - wr);
+
+    return wr;
+}
+
+ssize_t
+fdbuf_read(int fd, struct fdbuf *fdbuf)
+{
+    int r = read(fd, fdbuf->outptr, BUFSIZE - fdbuf->outlen);
+    if (r == -1)
+        return -1;
+
+    fdbuf->outlen += r;
+    fdbuf->outptr += r;
+
+    return r;
 }
 
 int main(int argc, char *argv[])
@@ -223,14 +250,11 @@ int main(int argc, char *argv[])
                 close(fds[i].fd);
                 fds[i].fd = -1;
             } else if (fds[i].revents & POLLIN) {
-                len = read(fds[i].fd, fdbufs[i].outptr, BUFSIZE - fdbufs[i].outlen);
+                len = fdbuf_read(fds[i].fd, &fdbufs[i]);
                 if (len == -1) {
                     warn("failed to read from fd %d:", i);
                     break;
                 }
-
-                fdbufs[i].outlen += len;
-                fdbufs[i].outptr += len;
                 // parsecmd should parse as much as it can, letting us know how
                 // much was left unparsed so we can move it to the beginning of
                 // the buffer.
@@ -282,15 +306,14 @@ int main(int argc, char *argv[])
 
         if (fds[BACKEND].revents & POLLIN) {
             fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
-            int ret = read(fds[BACKEND].fd, fdbufs[BACKEND].outptr, BUFSIZE - fdbufs[BACKEND].outlen);
+            int ret = fdbuf_read(fds[BACKEND].fd, &fdbufs[BACKEND]);
             if (ret == -1) {
                 warn("failed to read from backend:");
                 break;
             }
 
-            fdbufs[BACKEND].outlen += ret;
             ret = handle_resp(&fdbufs[BACKEND]);
-            memmove(fdbufs[BACKEND].outptr, fdbufs[BACKEND].outptr + ret + 1, BUFSIZE - (ret + 1));
+            memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret + 1, BUFSIZE - (ret + 1));
             /* TODO: temporary, only change this if it is a response to the command */
             active_command = false;
         }
@@ -322,13 +345,12 @@ int main(int argc, char *argv[])
             }
             fdbufs[BACKEND].inptr = fdbufs[BACKEND].in;
             fdbufs[BACKEND].inlen = len;
-            int wr = write(fds[BACKEND].fd, fdbufs[BACKEND].inptr, fdbufs[BACKEND].inlen);
+
+            int wr = fdbuf_write(fds[BACKEND].fd, &fdbufs[BACKEND]);
             if (wr == -1) {
                 warn("failed to write to backend!");
                 break;
             }
-            fdbufs[BACKEND].inptr += wr;
-            fdbufs[BACKEND].inlen -= wr;
             fprintf(stderr, "done writing: %d\n", fdbufs[BACKEND].inlen);
             active_command = true;
 
