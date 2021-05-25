@@ -9,53 +9,39 @@
 int
 sendcode(int fd, int code)
 {
-    int ret, left = 2;
-    char buf[2];
-    char *ptr = buf;
-    buf[0] = code;
-    buf[1] = '\0';
-
-    while (left > 0) {
-        ret = write(fd, ptr, left);
-        if (ret == -1)
-            return -1;
-
-        ptr += ret;
-        left -= ret;
-    }
-
-    return 0;
+    char c = code;
+    /* TODO make more robust */
+    int ret = write(fd, &c, 1);
+    if (ret == -1)
+        return -1;
 }
 
 int
 dial(int fd, char *num)
 {
-    char dialcode = CMD_DIAL;
-    int ret, left = strlen(num);
-    do {
-        ret = write(fd, &dialcode, 1);
-        if (ret == -1)
-            return -1;
-        if (ret == 1)
-            break;
-    } while (ret);
+    int ret, len = strlen(num), left;
+    char buf[PHONE_NUMBER_MAX_LEN + 3];
+    char *ptr;
+
+    if (len > PHONE_NUMBER_MAX_LEN)
+        return -1;
+
+    buf[0] = CMD_DIAL;
+    buf[1] = len & 0xFF;
+    buf[2] = (len >> 8) & 0xFF;
+
+    memcpy(buf + 3, num, len);
+
+    left = len + 3;
+    ptr = buf;
 
     do {
-        ret = write(fd, num, left);
+        ret = write(fd, ptr, left);
         if (ret == -1)
             return -1;
-        num += ret;
+        ptr += ret;
         left -= ret;
     } while (left);
-
-    do {
-        ret = write(fd, &"\0", 1);
-        if (ret == -1)
-            return -1;
-        if (ret == 1)
-            break;
-    } while (ret);
-    
 
     return 0;
 }

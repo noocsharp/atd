@@ -44,72 +44,57 @@ struct fdbuf {
     char *outptr;
 };
 
+ssize_t
+parse_str(char *in, char **out)
+{
+    short len;
+    char *ptr = in;
+    len = ptr[0] + (ptr[1] << 8);
+    assert(len < BUFSIZE);
+    ptr += 2;
+
+    *out = malloc(len);
+    if (!(*out))
+        return -1;
+
+    memcpy(*out, ptr, len);
+    return len + 2;
+}
+
 /* add one command to queue, returns the number of bytes intepreted if the
  * command was validated and added successfully, -1 if the queue is full, -2 if
- * the command is invalid but terminated, and -3 if the command is invalid and
- * unterminated */
+ * the command is invalid but terminated */
 ssize_t cmdadd(struct fdbuf fdbuf) {
     struct command cmd = {0, CMD_NONE, NULL};
-    char *end = memchr(fdbuf.out, '\0', fdbuf.outlen);
     char *ptr = fdbuf.out;
     size_t count = 0;
 
     if (cmdq.count == QUEUE_SIZE)
         return -1;
 
-    /* given that we have a max length for a command, if the buffer does not
-     * contain a terminated command, we can assume that the command is
-     * incomplete and read more data from the fd until the buffer is full. If
-     * it still doesn't contain a terminated command, then we know that we are
-     * dealing with garbage, and we throw it out, and inform the client. In
-     * case of garbage, two '\0' in a row flush the buffer */
-    if (end == NULL)
-        return -3;
-
     cmd.op = *(ptr++);
     switch (cmd.op) {
     case CMD_DIAL:
-        char num[PHONE_NUMBER_MAX_LEN];
-        while (*ptr != '\0') {
-            if (count > PHONE_NUMBER_MAX_LEN || strchr(DIALING_DIGITS, *ptr) == NULL)
-                goto bad;
+        count = parse_str(ptr, &cmd.data.dial.num);
+        if (count == -1)
+            return -1;
 
-            num[count] = *(ptr++);
-            count++;
-        }
-
-        cmd.data.dial.num = malloc(count + 1);
-        if (cmd.data.dial.num == NULL)
-            goto bad;
-
-        memcpy(cmd.data.dial.num, num, count);
-        ((char*)cmd.data.dial.num)[count] = '\0';
-        
-        fprintf(stderr, "received dial with number %s\n", cmd.data);
+        fprintf(stderr, "received dial with number %*.*s\n", count, count, cmd.data.dial.num);
         break;
     case CMD_ANSWER:
-        if (*ptr != '\0')
-            goto bad;
         fprintf(stderr, "received answer\n");
         break;
     case CMD_HANGUP:
         fprintf(stderr, "received hangup\n");
-        if (*ptr != '\0')
-            goto bad;
-        fprintf(stderr, "received hangup\n");
         break;
     default:
-        fprintf(stderr, "got code: %d\n", *(ptr - 1));
+        fprintf(stderr, "got code: %d\n", cmd.op);
     }
 
     /* we already checked that the queue has enough capacity */
     command_enqueue(cmd);
 
-    return ptr - fdbuf.out;
-
-bad:
-    fdbuf.outptr = end + 1;
-    return -2;
+    return count + 1;
 }
 
 size_t
@@ -304,9 +289,9 @@ int main(int argc, char *argv[])
                 continue;
 
             if (cmd.op == CMD_DIAL) {
-                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op], cmd.data.dial.num);
+                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmddata[cmd.op].atcmd, cmd.data.dial.num);
             } else {
-                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmd_to_at[cmd.op]);
+                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmddata[cmd.op].atcmd);
             }
             fprintf(stderr, "after data\n");
             if (ret >= BUFSIZE) {
