@@ -68,7 +68,7 @@ int main() {
             int ret = read(fds[SOCKFD].fd, fromsock, BUFSIZE);
             if (ret == -1) {
                 fprintf(stderr, "failed to read from socket\n");
-                return 1;
+                break;
             }
             write(STDOUT, fromsock, ret);
         }
@@ -78,7 +78,7 @@ int main() {
             int ret = write(fds[SOCKFD].fd, tosock, tocount);
             if (ret == -1) {
                 fprintf(stderr, "failed to read from socket\n");
-                return 1;
+                break;
             }
             tocount -= ret;
             memmove(tosock, tosock + ret, BUFSIZE - ret);
@@ -94,7 +94,7 @@ int main() {
             int ret = read(fds[STDIN].fd, tosock, BUFSIZE);
             if (ret == -1) {
                 fprintf(stderr, "failed to read from stdin\n");
-                return 1;
+                break;
             }
             tocount = ret;
             tooff = fromsock;
@@ -105,5 +105,6 @@ int main() {
     close(fds[SOCKFD].fd);
 err:
     close(sock);
+    unlink(sockaddr.sun_path);
     return 1;
 }
