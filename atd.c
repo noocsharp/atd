@@ -18,6 +18,9 @@
 #define AT_MAX 256
 #define ATD_SOCKET "/tmp/atd-socket"
 
+#define POLLADD(fd, arg) fd.events |= (arg)
+#define POLLDROP(fd, arg) fd.events &= ~(arg)
+
 #define QUEUE_MAX 100
 #define STDOUT 0
 #define STDIN 1
@@ -257,8 +260,8 @@ int main(int argc, char *argv[])
 
             fdbufs[STDIN].outlen = len;
             fdbufs[STDIN].outptr = fdbufs[STDIN].out;
-            fds[STDIN].events &= ~POLLIN;
-            fds[STDOUT].events |= POLLOUT;
+            POLLADD(fds[STDOUT], POLLOUT);
+            POLLDROP(fds[STDIN], POLLIN);
         }
 
         /* TODO write to stdout when a command is received */
@@ -272,8 +275,8 @@ int main(int argc, char *argv[])
             fdbufs[STDIN].outlen -= wr;
             fdbufs[STDIN].outptr += wr;
             if (fdbufs[STDIN].outlen == 0) {
-                fds[STDOUT].events &= ~POLLOUT;
-                fds[STDIN].events |= POLLIN;
+                POLLDROP(fds[STDOUT], POLLOUT);
+                POLLADD(fds[STDIN], POLLIN);
             }
         }
 
@@ -293,9 +296,9 @@ int main(int argc, char *argv[])
         }
 
         if (cmdq.count && !active_command)
-            fds[BACKEND].events |= POLLOUT;
+            POLLADD(fds[BACKEND], POLLOUT);
         else
-            fds[BACKEND].events &= ~POLLOUT;
+            POLLDROP(fds[BACKEND], POLLOUT);
 
         /* send next command to modem */
         if (fds[BACKEND].revents & POLLOUT) {
@@ -331,8 +334,8 @@ int main(int argc, char *argv[])
 
             /* don't write any more until we hear back */
             if (fdbufs[BACKEND].inlen == 0) {
-                fds[BACKEND].events &= ~POLLOUT;
-                fds[BACKEND].events |= POLLIN;
+                POLLDROP(fds[BACKEND], POLLOUT);
+                POLLADD(fds[BACKEND], POLLIN);
             }
         }
 
