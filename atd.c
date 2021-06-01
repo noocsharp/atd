@@ -1,3 +1,5 @@
+#define _GNU_SOURCE // memmem
+
 #include <assert.h>
 #include <poll.h>
 #include <stdbool.h>
@@ -100,16 +102,36 @@ ssize_t cmdadd(struct fdbuf fdbuf) {
 size_t
 handle_resp(struct fdbuf *fdbuf)
 {
-    fprintf(stderr, "got here\n");
-    char *ptr = strchr(fdbuf->out, '\n');
-    size_t len;
-    if (ptr) {
-        len = ptr - fdbuf->out;
-        fprintf(stderr, "response: %*.*s\n", len, len, fdbuf->out);
-        return len;
+    fprintf(stderr, "handle_resp start\n");
+    char *start = fdbuf->out, *ptr = memmem(fdbuf->out, fdbuf->outlen, "\r\n", 2);
+
+    for (int i = 0; i < fdbuf->outlen; i++) {
+        fprintf(stderr, "%x ", fdbuf->out[i]);
+    }
+    fprintf(stderr, "\n");
+
+    if (ptr == NULL)
+        return 0;
+
+    // find next line with content
+    while (start == ptr) {
+        ptr += sizeof("\r\n");
+        start = ptr;
+        ptr = memmem(start, BUFSIZE - (ptr - fdbuf->out), "\r\n", 2);
     }
 
-    return 0;
+    if (strncmp(start, "NO CARRIER", sizeof("NO CARRIER") - 1) == 0) {
+        fprintf(stderr, "got NO CARRIER\n");
+    } else if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
+        fprintf(stderr, "got OK\n");
+    } else if (strncmp(start, "RING", sizeof("RING") - 1) == 0) {
+        fprintf(stderr, "got RING\n");
+    }
+
+    ptr += 2;
+
+    fprintf(stderr, "handle_resp: %d\n", ptr - fdbuf->out);
+    return ptr - fdbuf->out;
 }
 
 ssize_t
@@ -236,8 +258,7 @@ int main(int argc, char *argv[])
                 close(fds[i].fd);
                 fds[i].fd = -1;
             } else if (fds[i].revents & POLLIN) {
-                ret = fdbuf_read(fds[i].fd, &fdbufs[i]);
-                if (ret == -1) {
+                if (fdbuf_read(fds[i].fd, &fdbufs[i]) == -1) {
                     warn("failed to read from fd %d:", i);
                     break;
                 }
@@ -245,17 +266,15 @@ int main(int argc, char *argv[])
                 // much was left unparsed so we can move it to the beginning of
                 // the buffer.
                 ret = cmdadd(fdbufs[i]);
-                if (ret == -2) {
-                    continue;
-                } else if (ret == -1) {
-                    // TODO mark paused
-                } else {
-                    fprintf(stderr, "got here\n");
+                if (ret != -1) {
                     assert(ret <= BUFSIZE);
                     fdbufs[i].outlen -= ret;
                     memmove(fdbufs[i].out, fdbufs[i].out + ret, fdbufs[i].outlen);
                     assert(fdbufs[i].outlen >= 0);
                     fdbufs[i].outptr = fdbufs[i].out + fdbufs[i].outlen;
+                } else {
+                    warn("failed to parse command\n");
+                    break;
                 }
             }
         }
@@ -269,7 +288,9 @@ int main(int argc, char *argv[])
             }
 
             ret = handle_resp(&fdbufs[BACKEND]);
-            memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret + 1, BUFSIZE - (ret + 1));
+            memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
+            fdbufs[BACKEND].outlen -= ret;
+            fdbufs[BACKEND].outptr -= ret;
             /* TODO: temporary, only change this if it is a response to the command */
             active_command = false;
         }

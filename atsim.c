@@ -96,7 +96,17 @@ int main() {
                 fprintf(stderr, "failed to read from stdin\n");
                 break;
             }
-            tocount = ret;
+
+            if (tosock[ret-1] == '\n') {
+                tosock[ret-1] = '\r';
+                tosock[ret] = '\n';
+                tosock[ret+1] = '\0';
+                tocount = ret + 1;
+            } 
+
+            for (int i = 0; i < tocount; i++) {
+                fprintf(stderr, "%x ", tosock[i]);
+            }
             tooff = fromsock;
             fds[SOCKFD].events |= POLLOUT;
         }
