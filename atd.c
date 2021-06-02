@@ -11,6 +11,7 @@
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include "atd.h"
@@ -183,6 +184,27 @@ fdbuf_read(int fd, struct fdbuf *fdbuf)
     return r;
 }
 
+static int
+setup_modem_tty(int fd)
+{
+    struct termios config;
+
+    tcgetattr(fd, &config);
+    config.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | INPCK | ICRNL | INLCR | ISTRIP | IXON);
+    config.c_oflag = 0;
+    config.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
+    config.c_cflag &= ~(CSIZE | PARENB);
+    config.c_cflag |= CS8;
+    config.c_cc[VMIN] = 1;
+    config.c_cc[VTIME] = 0;
+
+    cfsetispeed(&config, B115200);
+    cfsetospeed(&config, B115200);
+
+    tcsetattr(fd, TCSANOW, &config);
+    return 1;
+}
+
 int main(int argc, char *argv[])
 {
     argv0 = argv[0];
@@ -219,7 +241,10 @@ int main(int argc, char *argv[])
     for (int i = 0; i < MAX_FDS; i++)
         fds[i].fd = -1;
 
-    int backsock = socket(AF_UNIX, SOCK_STREAM, 0);
+    int backsock;
+
+#ifdef DEBUG
+    backsock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (backsock == -1) {
         warn("failed to create backend socket:");
         goto error;
@@ -229,6 +254,9 @@ int main(int argc, char *argv[])
         warn("failed to connect to backend:");
         goto error;
     }
+#else
+    backsock = open("/dev/ttyUSB2", O_RDWR | O_NOCTTY);
+#endif
 
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock == -1) {
