@@ -66,8 +66,8 @@ parse_str(char *in, char **out)
 /* add one command to queue, returns the number of bytes intepreted if the
  * command was validated and added successfully, -1 if the queue is full, -2 if
  * the command is invalid but terminated */
-ssize_t cmdadd(struct fdbuf fdbuf) {
-    struct command cmd = {0, CMD_NONE, NULL};
+ssize_t cmdadd(int index, struct fdbuf fdbuf) {
+    struct command cmd = {index, CMD_NONE, NULL};
     char *ptr = fdbuf.out;
     size_t count = 0;
 
@@ -99,11 +99,26 @@ ssize_t cmdadd(struct fdbuf fdbuf) {
     return count + 1;
 }
 
+int
+send_status(int fd, enum status status)
+{
+    fprintf(stderr, "send_status\n");
+    char st = status;
+    ssize_t ret;
+    do {
+        ret = write(fd, &st, 1);
+        if (ret == -1)
+            return -1;
+    } while (ret != 1);
+    return 0;
+}
+
 size_t
-handle_resp(struct fdbuf *fdbuf)
+handle_resp(struct command cmd, int fd, struct fdbuf *fdbuf)
 {
     fprintf(stderr, "handle_resp start\n");
     char *start = fdbuf->out, *ptr = memmem(fdbuf->out, fdbuf->outlen, "\r\n", 2);
+    enum status status = 0;
 
     for (int i = 0; i < fdbuf->outlen; i++) {
         fprintf(stderr, "%x ", fdbuf->out[i]);
@@ -121,12 +136,19 @@ handle_resp(struct fdbuf *fdbuf)
     }
 
     if (strncmp(start, "NO CARRIER", sizeof("NO CARRIER") - 1) == 0) {
+        status = STATUS_ERROR;
         fprintf(stderr, "got NO CARRIER\n");
     } else if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
+        status = STATUS_OK;
         fprintf(stderr, "got OK\n");
     } else if (strncmp(start, "RING", sizeof("RING") - 1) == 0) {
         fprintf(stderr, "got RING\n");
     }
+
+    fprintf(stderr, "fd: %d\n", fd);
+
+    if (status && fd > 0)
+        send_status(fd, status);
 
     ptr += 2;
 
@@ -174,7 +196,7 @@ int main(int argc, char *argv[])
         .sun_family = AF_UNIX,
         .sun_path = "/tmp/atsim",
     };
-
+    struct command cmd;
     ssize_t ret = 0;
     struct pollfd fds[MAX_FDS];
     sigset_t mask;
@@ -265,7 +287,7 @@ int main(int argc, char *argv[])
                 // parsecmd should parse as much as it can, letting us know how
                 // much was left unparsed so we can move it to the beginning of
                 // the buffer.
-                ret = cmdadd(fdbufs[i]);
+                ret = cmdadd(i, fdbufs[i]);
                 if (ret != -1) {
                     assert(ret <= BUFSIZE);
                     fdbufs[i].outlen -= ret;
@@ -287,7 +309,7 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            ret = handle_resp(&fdbufs[BACKEND]);
+            ret = handle_resp(cmd, fds[cmd.index].fd, &fdbufs[BACKEND]);
             memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
             fdbufs[BACKEND].outlen -= ret;
             fdbufs[BACKEND].outptr -= ret;
@@ -303,7 +325,7 @@ int main(int argc, char *argv[])
         /* send next command to modem */
         if (fds[BACKEND].revents & POLLOUT) {
             fprintf(stderr, "have a command!\n");
-            struct command cmd = command_dequeue();
+            cmd = command_dequeue();
             fprintf(stderr, "op: %d\n", cmd.op);
 
             if (!cmd.op)

@@ -9,6 +9,11 @@ enum ops {
     CMD_HANGUP,
 };
 
+enum status {
+	STATUS_OK = 1,
+	STATUS_ERROR,
+};
+
 struct command {
     int index;
     enum ops op;

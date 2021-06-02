@@ -91,6 +91,12 @@ main(int argc, char *argv[])
         break;
     }
 
+	char buf;
+	read(sock, &buf, 1);
+
+	if (buf == STATUS_OK)
+		fprintf(stderr, "OK\n");
+
     sleep(1);
 
     close(con);
