@@ -101,7 +101,8 @@ ssize_t cmdadd(int index, struct fdbuf fdbuf) {
     }
 
     /* we already checked that the queue has enough capacity */
-    command_enqueue(cmd);
+    if (cmd.op)
+        command_enqueue(cmd);
 
     return count + 1;
 }
@@ -201,9 +202,30 @@ fdbuf_read(int fd, struct fdbuf *fdbuf)
 }
 
 bool
-send_command(int fd, struct fdbuf *fdbuf, enum atcmd atcmd)
+send_command(int fd, struct fdbuf *fdbuf, enum atcmd atcmd, union atdata atdata)
 {
     ssize_t ret;
+    if (atcmd == ATD) {
+        ret = snprintf(fdbuf->in, BUFSIZE, atcmds[atcmd], atdata.dial.num);
+    } else {
+        ret = snprintf(fdbuf->in, BUFSIZE, atcmds[atcmd]);
+    }
+    fprintf(stderr, "after data\n");
+    if (ret >= BUFSIZE) {
+        warn("AT command too long!");
+        return false;
+    }
+    fdbuf->inptr = fdbuf->in;
+    fdbuf->inlen = ret;
+
+    ret = fdbuf_write(fd, fdbuf);
+    if (ret == -1) {
+        warn("failed to write to backend!");
+        return false;
+    }
+    fprintf(stderr, "done writing: %d\n", fdbuf->inlen);
+    active_command = true;
+    return true;
 }
 
 static int
@@ -375,29 +397,8 @@ int main(int argc, char *argv[])
             cmd = command_dequeue();
             fprintf(stderr, "op: %d\n", cmd.op);
 
-            if (!cmd.op)
-                continue;
-
-            if (cmd.op == CMD_DIAL) {
-                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, atcmds[cmddata[cmd.op].atcmd], cmd.data.dial.num);
-            } else {
-                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, atcmds[cmddata[cmd.op].atcmd]);
-            }
-            fprintf(stderr, "after data\n");
-            if (ret >= BUFSIZE) {
-                warn("AT command too long!");
+            if (!send_command(fds[BACKEND].fd, &fdbufs[BACKEND], cmddata[cmd.op].atcmd, cmd.data))
                 break;
-            }
-            fdbufs[BACKEND].inptr = fdbufs[BACKEND].in;
-            fdbufs[BACKEND].inlen = ret;
-
-            int wr = fdbuf_write(fds[BACKEND].fd, &fdbufs[BACKEND]);
-            if (wr == -1) {
-                warn("failed to write to backend!");
-                break;
-            }
-            fprintf(stderr, "done writing: %d\n", fdbufs[BACKEND].inlen);
-            active_command = true;
 
             /* don't write any more until we hear back */
             if (fdbufs[BACKEND].inlen == 0) {
