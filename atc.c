@@ -96,6 +96,8 @@ main(int argc, char *argv[])
 
 	if (buf == STATUS_OK)
 		fprintf(stderr, "OK\n");
+	else
+		fprintf(stderr, "ERROR\n");
 
     sleep(1);
 

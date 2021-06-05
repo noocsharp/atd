@@ -47,6 +47,11 @@ struct fdbuf {
     char *outptr;
 };
 
+struct command currentcmd;
+int cmd_progress;
+bool active_command = false;
+bool check_call_status = false;
+
 ssize_t
 parse_str(char *in, char **out)
 {
@@ -92,6 +97,7 @@ ssize_t cmdadd(int index, struct fdbuf fdbuf) {
         break;
     default:
         fprintf(stderr, "got code: %d\n", cmd.op);
+        return -2;
     }
 
     /* we already checked that the queue has enough capacity */
@@ -121,32 +127,37 @@ handle_resp(struct command cmd, int fd, struct fdbuf *fdbuf)
     char *start = fdbuf->out, *ptr = memmem(fdbuf->out, fdbuf->outlen, "\r\n", 2);
     enum status status = 0;
 
-    for (int i = 0; i < fdbuf->outlen; i++) {
-        fprintf(stderr, "%x ", fdbuf->out[i]);
-    }
-    fprintf(stderr, "\n");
-
     if (ptr == NULL)
         return 0;
 
     // find next line with content
     while (start == ptr) {
-        ptr += sizeof("\r\n");
+        ptr += sizeof("\r\n") - 1;
         start = ptr;
-        ptr = memmem(start, BUFSIZE - (ptr - fdbuf->out), "\r\n", 2);
+        ptr = memmem(start, fdbuf->outlen - (ptr - fdbuf->out), "\r\n", 2);
     }
 
-    if (strncmp(start, "NO CARRIER", sizeof("NO CARRIER") - 1) == 0) {
-        status = STATUS_ERROR;
-        fprintf(stderr, "got NO CARRIER\n");
-    } else if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
+    if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
         status = STATUS_OK;
+        active_command = false;
         fprintf(stderr, "got OK\n");
+    } else if (strncmp(start, "ERROR", sizeof("ERROR") - 1) == 0) {
+        status = STATUS_ERROR;
+        active_command = false;
+        fprintf(stderr, "got ERROR\n");
+    } else if (strncmp(start, "NO CARRIER", sizeof("NO CARRIER") - 1) == 0) {
+        check_call_status = true;
+        fprintf(stderr, "got NO CARRIER\n");
     } else if (strncmp(start, "RING", sizeof("RING") - 1) == 0) {
+        check_call_status = true;
         fprintf(stderr, "got RING\n");
+    } else if (strncmp(start, "CONNECT", sizeof("CONNECT") - 1) == 0) {
+        check_call_status = true;
+        fprintf(stderr, "got CONNECT\n");
+    } else if (strncmp(start, "BUSY", sizeof("BUSY") - 1) == 0) {
+        check_call_status = true;
+        fprintf(stderr, "got BUSY\n");
     }
-
-    fprintf(stderr, "fd: %d\n", fd);
 
     if (status && fd > 0)
         send_status(fd, status);
@@ -155,6 +166,11 @@ handle_resp(struct command cmd, int fd, struct fdbuf *fdbuf)
 
     fprintf(stderr, "handle_resp: %d\n", ptr - fdbuf->out);
     return ptr - fdbuf->out;
+}
+
+ssize_t
+update_call_status()
+{
 }
 
 ssize_t
@@ -182,6 +198,12 @@ fdbuf_read(int fd, struct fdbuf *fdbuf)
     fdbuf->outptr += r;
 
     return r;
+}
+
+bool
+send_command(int fd, struct fdbuf *fdbuf, enum atcmd atcmd)
+{
+    ssize_t ret;
 }
 
 static int
@@ -223,7 +245,6 @@ int main(int argc, char *argv[])
     struct pollfd fds[MAX_FDS];
     sigset_t mask;
     char *next;
-    bool active_command = false;
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
@@ -341,8 +362,6 @@ int main(int argc, char *argv[])
             memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
             fdbufs[BACKEND].outlen -= ret;
             fdbufs[BACKEND].outptr -= ret;
-            /* TODO: temporary, only change this if it is a response to the command */
-            active_command = false;
         }
 
         if (cmdq.count && !active_command)
@@ -360,9 +379,9 @@ int main(int argc, char *argv[])
                 continue;
 
             if (cmd.op == CMD_DIAL) {
-                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmddata[cmd.op].atcmd, cmd.data.dial.num);
+                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, atcmds[cmddata[cmd.op].atcmd], cmd.data.dial.num);
             } else {
-                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, cmddata[cmd.op].atcmd);
+                ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, atcmds[cmddata[cmd.op].atcmd]);
             }
             fprintf(stderr, "after data\n");
             if (ret >= BUFSIZE) {

@@ -9,36 +9,66 @@ enum ops {
     CMD_HANGUP,
 };
 
+enum callstatus {
+    CALL_ACTIVE,
+    CALL_HELD,
+    CALL_DIALING,
+    CALL_ALERTING,
+    CALL_INCOMING,
+    CALL_WAITING,
+};
+
 enum status {
 	STATUS_OK = 1,
 	STATUS_ERROR,
 };
 
+enum atcmd {
+	ATD,
+	ATA,
+	ATH,
+	CLCC,
+};
+
+union atdata {
+	struct {
+		char *num;
+	} dial;
+};
+
 struct command {
     int index;
     enum ops op;
-    union {
-        struct {
-            char *num;
-        } dial;
-    } data;
+    union atdata data;
+};
+
+struct call {
+	enum callstatus status;
+	char num[PHONE_NUMBER_MAX_LEN];
 };
 
 
 /* should have at most 256 things */
-enum types {
+enum type {
     TYPE_NONE = 0,
     TYPE_STRING,
 };
 
 #define MAX_PARAMS 1
 struct command_args {
-    char *atcmd;
-    char type[MAX_PARAMS + 1];
+	enum atcmd atcmd;
+    enum type type[MAX_PARAMS + 1];
 };
 
 struct command_args cmddata[] = {
-    [CMD_DIAL] = { "ATD%s;\r", { TYPE_STRING, TYPE_NONE} },
-    [CMD_ANSWER] = { "ATA\r", { TYPE_NONE} },
-    [CMD_HANGUP] = { "ATH\r", { TYPE_NONE} },
+    [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
+    [CMD_ANSWER] = { ATA, { TYPE_NONE} },
+    [CMD_HANGUP] = { ATH, { TYPE_NONE} },
+};
+
+char *atcmds[] = {
+	[ATD] = "ATD%s;\r",
+	[ATA] = "ATA\r",
+	[ATH] = "ATH\r",
+	[CLCC] = "AT+CLCC\r",
 };
