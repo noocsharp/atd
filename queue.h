@@ -23,6 +23,7 @@ struct command command_dequeue() {
         return (struct command){ .op = CMD_NONE };
 
     cmd = cmdq.cmds[cmdq.first];
+    cmdq.cmds[cmdq.first].op = CMD_NONE;
     cmdq.first = (cmdq.first + 1) % QUEUE_SIZE;
     cmdq.count--;
     return cmd;

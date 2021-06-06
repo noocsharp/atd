@@ -28,6 +28,8 @@
 #define STDOUT 0
 #define STDIN 1
 #define STDERR 2
+
+
 #define LISTENER 3
 #define BACKEND 5
 #define SIGNALINT 6
@@ -51,6 +53,12 @@ struct command currentcmd;
 int cmd_progress;
 bool active_command = false;
 bool check_call_status = false;
+bool handling_urc = false;
+enum atcmd currentatcmd;
+
+#define MAX_CALLS 8
+struct call calls[MAX_CALLS];
+struct call calls2[MAX_CALLS];
 
 ssize_t
 parse_str(char *in, char **out)
@@ -121,8 +129,29 @@ send_status(int fd, enum status status)
     return 0;
 }
 
+struct call
+parseclcc(char *start, size_t len)
+{
+    unsigned char idx;
+    unsigned char dir;
+    unsigned char stat;
+    unsigned char mode;
+    unsigned char mpty;
+    char number[PHONE_NUMBER_MAX_LEN];
+    unsigned char type;
+    unsigned char alpha;
+
+    struct call call = { .present = true };
+
+    int ret = sscanf(start, "+CLCC: %hhu,%hhu,%hhu,%hhu,%hhu,\"%[+1234567890ABCD]\",%hhu,%hhu", &idx, &dir, &call.status, &mode, &mpty, call.num, &type, &alpha);
+
+    fprintf(stderr, "clcc: got %d successful matches\n", ret);
+
+    calls2[idx] = call;
+}
+
 size_t
-handle_resp(struct command cmd, int fd, struct fdbuf *fdbuf)
+handle_resp(int fd, struct fdbuf *fdbuf)
 {
     fprintf(stderr, "handle_resp start\n");
     char *start = fdbuf->out, *ptr = memmem(fdbuf->out, fdbuf->outlen, "\r\n", 2);
@@ -141,11 +170,18 @@ handle_resp(struct command cmd, int fd, struct fdbuf *fdbuf)
     if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
         status = STATUS_OK;
         active_command = false;
+        if (handling_urc) {
+            handling_urc = false;
+        }
         fprintf(stderr, "got OK\n");
     } else if (strncmp(start, "ERROR", sizeof("ERROR") - 1) == 0) {
         status = STATUS_ERROR;
         active_command = false;
         fprintf(stderr, "got ERROR\n");
+        if (currentatcmd == CLCC) {
+            memcpy(calls, calls2, MAX_CALLS*sizeof(calls[0]));
+            memset(calls2, 0, MAX_CALLS*sizeof(calls[0]));
+        }
     } else if (strncmp(start, "NO CARRIER", sizeof("NO CARRIER") - 1) == 0) {
         check_call_status = true;
         fprintf(stderr, "got NO CARRIER\n");
@@ -158,6 +194,11 @@ handle_resp(struct command cmd, int fd, struct fdbuf *fdbuf)
     } else if (strncmp(start, "BUSY", sizeof("BUSY") - 1) == 0) {
         check_call_status = true;
         fprintf(stderr, "got BUSY\n");
+    } else if (strncmp(start, "+CLCC", sizeof("+CLCC") - 1) == 0) {
+        fprintf(stderr, "got +CLCC\n");
+        assert(check_call_status);
+
+        struct call call = parseclcc(start, ptr - start);
     }
 
     if (status && fd > 0)
@@ -205,6 +246,7 @@ bool
 send_command(int fd, struct fdbuf *fdbuf, enum atcmd atcmd, union atdata atdata)
 {
     ssize_t ret;
+    fprintf(stderr, "send command\n");
     if (atcmd == ATD) {
         ret = snprintf(fdbuf->in, BUFSIZE, atcmds[atcmd], atdata.dial.num);
     } else {
@@ -225,6 +267,7 @@ send_command(int fd, struct fdbuf *fdbuf, enum atcmd atcmd, union atdata atdata)
     }
     fprintf(stderr, "done writing: %d\n", fdbuf->inlen);
     active_command = true;
+    currentatcmd = atcmd;
     return true;
 }
 
@@ -380,13 +423,15 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            ret = handle_resp(cmd, fds[cmd.index].fd, &fdbufs[BACKEND]);
+            ret = handle_resp(fds[cmd.index].fd, &fdbufs[BACKEND]);
             memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
             fdbufs[BACKEND].outlen -= ret;
             fdbufs[BACKEND].outptr -= ret;
         }
 
-        if (cmdq.count && !active_command)
+        /* note that this doesn't take effect until the next poll cycle...
+         * maybe this can be replaced with something more integrated? */
+        if ((cmdq.count || check_call_status) && !active_command)
             POLLADD(fds[BACKEND], POLLOUT);
         else
             POLLDROP(fds[BACKEND], POLLOUT);
@@ -394,11 +439,19 @@ int main(int argc, char *argv[])
         /* send next command to modem */
         if (fds[BACKEND].revents & POLLOUT) {
             fprintf(stderr, "have a command!\n");
-            cmd = command_dequeue();
-            fprintf(stderr, "op: %d\n", cmd.op);
 
-            if (!send_command(fds[BACKEND].fd, &fdbufs[BACKEND], cmddata[cmd.op].atcmd, cmd.data))
-                break;
+            if (check_call_status) {
+                if (!send_command(fds[BACKEND].fd, &fdbufs[BACKEND], CLCC, (union atdata){0}))
+                    break;
+                handling_urc = true;
+            } else {
+                cmd = command_dequeue();
+                fprintf(stderr, "op: %d\n", cmd.op);
+                assert(cmd.op != CMD_NONE);
+
+                if (!send_command(fds[BACKEND].fd, &fdbufs[BACKEND], cmddata[cmd.op].atcmd, cmd.data))
+                    break;
+            }
 
             /* don't write any more until we hear back */
             if (fdbufs[BACKEND].inlen == 0) {

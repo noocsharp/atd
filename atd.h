@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 #define PHONE_NUMBER_MAX_LEN 15
 #define DIALING_DIGITS "0123456789*#+ABC"
 
@@ -43,6 +45,7 @@ struct command {
 };
 
 struct call {
+    bool present;
 	enum callstatus status;
 	char num[PHONE_NUMBER_MAX_LEN];
 };
