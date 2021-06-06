@@ -55,6 +55,7 @@ bool active_command = false;
 bool check_call_status = false;
 bool handling_urc = false;
 enum atcmd currentatcmd;
+int calld = -1;
 
 struct fdbuf fdbufs[MAX_FDS] = {0};
 
@@ -105,6 +106,12 @@ ssize_t cmdadd(int index) {
     case CMD_HANGUP:
         fprintf(stderr, "received hangup\n");
         break;
+    case CMD_CALL_EVENTS:
+        fprintf(stderr, "received request call events\n");
+        if (calld == -1)
+            calld = index;
+        goto end;
+        break;
     default:
         fprintf(stderr, "got code: %d\n", cmd.op);
         return -2;
@@ -114,6 +121,7 @@ ssize_t cmdadd(int index) {
     if (cmd.op)
         command_enqueue(cmd);
 
+end:
     return count + 1;
 }
 
@@ -152,6 +160,53 @@ parseclcc(char *start, size_t len)
     calls2[idx] = call;
 }
 
+/* [0] = STATUS_CALL
+   [1] = # of update entries
+   list of update entries follows
+   update entry is a callstatus, followed by a string containing the phone number */
+void
+update_call_status()
+{
+    fprintf(stderr, "update call status\n");
+    char buf[(PHONE_NUMBER_MAX_LEN + 2) * MAX_CALLS + 2];
+    char *ptr;
+    size_t len;
+    ssize_t ret;
+
+    if (calld < 0)
+        return;
+
+    buf[0] = STATUS_CALL;
+    buf[1] = 0;
+
+    ptr = buf + 2;
+
+    for (int i = 1; i < MAX_CALLS; i++) {
+        if (!(calls[i].present || calls2[i].present))
+            continue;
+
+        if ((calls[i].status == calls2[i].status) && strcmp(calls[i].num, calls2[i].num) == 0)
+            continue;
+        fprintf(stderr, "update POINT 0: %d, %s\n", i, calls2[i].num);
+
+        len = strlen(calls2[i].num);
+        *ptr = len;
+        strcpy(ptr + 1, calls2[i].num);
+        ptr += len;
+
+        buf[1]++;
+    }
+
+    fprintf(stderr, "update POINT 1: %d\n", ptr - buf);
+    memcpy(fdbufs[calld].inptr, buf, ptr - buf);
+    fdbufs[calld].inlen += ptr - buf;
+
+    fprintf(stderr, "update POINT 2\n");
+    memcpy(calls, calls2, MAX_CALLS*sizeof(calls[0]));
+    memset(calls2, 0, MAX_CALLS*sizeof(calls[0]));
+    fprintf(stderr, "update POINT 3\n");
+}
+
 size_t
 handle_resp(int fd, int idx)
 {
@@ -172,18 +227,17 @@ handle_resp(int fd, int idx)
     if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
         status = STATUS_OK;
         active_command = false;
-        if (handling_urc) {
+        if (handling_urc)
             handling_urc = false;
+        if (currentatcmd == CLCC) {
+            update_call_status();
+            check_call_status = false;
         }
         fprintf(stderr, "got OK\n");
     } else if (strncmp(start, "ERROR", sizeof("ERROR") - 1) == 0) {
         status = STATUS_ERROR;
         active_command = false;
         fprintf(stderr, "got ERROR\n");
-        if (currentatcmd == CLCC) {
-            memcpy(calls, calls2, MAX_CALLS*sizeof(calls[0]));
-            memset(calls2, 0, MAX_CALLS*sizeof(calls[0]));
-        }
     } else if (strncmp(start, "NO CARRIER", sizeof("NO CARRIER") - 1) == 0) {
         check_call_status = true;
         fprintf(stderr, "got NO CARRIER\n");
@@ -210,11 +264,6 @@ handle_resp(int fd, int idx)
 
     fprintf(stderr, "handle_resp: %d\n", ptr - fdbufs[idx].out);
     return ptr - fdbufs[idx].out;
-}
-
-ssize_t
-update_call_status()
-{
 }
 
 ssize_t
@@ -393,6 +442,8 @@ int main(int argc, char *argv[])
                 warn("closed connection!");
                 close(fds[i].fd);
                 fds[i].fd = -1;
+                if (i == calld)
+                    calld = -1;
             } else if (fds[i].revents & POLLIN) {
                 if (fdbuf_read(fds[i].fd, i) == -1) {
                     warn("failed to read from fd %d:", i);
@@ -412,6 +463,14 @@ int main(int argc, char *argv[])
                     warn("failed to parse command\n");
                     break;
                 }
+            } else if (fds[i].revents & POLLOUT) {
+                if (fdbuf_write(fds[i].fd, i) == -1) {
+                    warn("failed to write to fd %d:", i);
+                    break;
+                }
+
+                if (fdbufs[i].inlen == 0)
+                    POLLDROP(fds[i], POLLOUT);
             }
         }
 
@@ -422,6 +481,10 @@ int main(int argc, char *argv[])
                 warn("failed to read from backend:");
                 break;
             }
+
+            /* TODO should this be here? */
+            if (check_call_status)
+                POLLADD(fds[calld], POLLOUT);
 
             ret = handle_resp(fds[cmd.index].fd, BACKEND);
             memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
@@ -473,6 +536,7 @@ int main(int argc, char *argv[])
                 }
                 fds[i].events = POLLIN;
                 fdbufs[i].outptr = fdbufs[i].out;
+                fdbufs[i].inptr = fdbufs[i].in;
                 warn("accepted connection!", fds[i].fd);
                 break;
             }

@@ -9,6 +9,7 @@ enum ops {
     CMD_DIAL,
     CMD_ANSWER,
     CMD_HANGUP,
+    CMD_CALL_EVENTS,
 };
 
 enum callstatus {
@@ -23,6 +24,7 @@ enum callstatus {
 enum status {
 	STATUS_OK = 1,
 	STATUS_ERROR,
+	STATUS_CALL,
 };
 
 enum atcmd {

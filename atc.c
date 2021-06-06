@@ -65,6 +65,8 @@ main(int argc, char *argv[])
         cmd = CMD_ANSWER;
     } else if (strcmp(argv[1], "hangup") == 0) {
         cmd = CMD_HANGUP;
+    } else if (strcmp(argv[1], "callevents") == 0) {
+        cmd = CMD_CALL_EVENTS;
     }
 
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -91,13 +93,21 @@ main(int argc, char *argv[])
         break;
     }
 
-	char buf;
-	read(sock, &buf, 1);
+    char buf[1024];
 
-	if (buf == STATUS_OK)
+	if (cmd != CMD_CALL_EVENTS) {
+		read(sock, buf, 1);
+	} else {
+		read(sock, buf, 1024);
+	}
+
+	if (*buf == STATUS_OK)
 		fprintf(stderr, "OK\n");
-	else
+	else if (*buf == STATUS_OK)
 		fprintf(stderr, "ERROR\n");
+	else if (*buf == STATUS_CALL) {
+		fprintf(stderr, "CALLSTATUS\n");
+	}
 
     sleep(1);
 
