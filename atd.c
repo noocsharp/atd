@@ -56,6 +56,8 @@ bool check_call_status = false;
 bool handling_urc = false;
 enum atcmd currentatcmd;
 
+struct fdbuf fdbufs[MAX_FDS] = {0};
+
 #define MAX_CALLS 8
 struct call calls[MAX_CALLS];
 struct call calls2[MAX_CALLS];
@@ -80,9 +82,9 @@ parse_str(char *in, char **out)
 /* add one command to queue, returns the number of bytes intepreted if the
  * command was validated and added successfully, -1 if the queue is full, -2 if
  * the command is invalid but terminated */
-ssize_t cmdadd(int index, struct fdbuf fdbuf) {
+ssize_t cmdadd(int index) {
     struct command cmd = {index, CMD_NONE, NULL};
-    char *ptr = fdbuf.out;
+    char *ptr = fdbufs[index].out;
     size_t count = 0;
 
     if (cmdq.count == QUEUE_SIZE)
@@ -151,10 +153,10 @@ parseclcc(char *start, size_t len)
 }
 
 size_t
-handle_resp(int fd, struct fdbuf *fdbuf)
+handle_resp(int fd, int idx)
 {
     fprintf(stderr, "handle_resp start\n");
-    char *start = fdbuf->out, *ptr = memmem(fdbuf->out, fdbuf->outlen, "\r\n", 2);
+    char *start = fdbufs[idx].out, *ptr = memmem(fdbufs[idx].out, fdbufs[idx].outlen, "\r\n", 2);
     enum status status = 0;
 
     if (ptr == NULL)
@@ -164,7 +166,7 @@ handle_resp(int fd, struct fdbuf *fdbuf)
     while (start == ptr) {
         ptr += sizeof("\r\n") - 1;
         start = ptr;
-        ptr = memmem(start, fdbuf->outlen - (ptr - fdbuf->out), "\r\n", 2);
+        ptr = memmem(start, fdbufs[idx].outlen - (ptr - fdbufs[idx].out), "\r\n", 2);
     }
 
     if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
@@ -206,8 +208,8 @@ handle_resp(int fd, struct fdbuf *fdbuf)
 
     ptr += 2;
 
-    fprintf(stderr, "handle_resp: %d\n", ptr - fdbuf->out);
-    return ptr - fdbuf->out;
+    fprintf(stderr, "handle_resp: %d\n", ptr - fdbufs[idx].out);
+    return ptr - fdbufs[idx].out;
 }
 
 ssize_t
@@ -216,56 +218,56 @@ update_call_status()
 }
 
 ssize_t
-fdbuf_write(int fd, struct fdbuf *fdbuf)
+fdbuf_write(int fd, int idx)
 {
-    int wr = write(fd, &fdbuf->in, fdbuf->inlen);
+    int wr = write(fd, &fdbufs[idx].in, fdbufs[idx].inlen);
     if (wr == -1)
         return -1;
 
-    fdbuf->inlen -= wr;
-    fdbuf->inptr -= wr;
-    memmove(fdbuf->in, fdbuf->in + wr, BUFSIZE - wr);
+    fdbufs[idx].inlen -= wr;
+    fdbufs[idx].inptr -= wr;
+    memmove(fdbufs[idx].in, fdbufs[idx].in + wr, BUFSIZE - wr);
 
     return wr;
 }
 
 ssize_t
-fdbuf_read(int fd, struct fdbuf *fdbuf)
+fdbuf_read(int fd, int idx)
 {
-    int r = read(fd, fdbuf->outptr, BUFSIZE - fdbuf->outlen);
+    int r = read(fd, fdbufs[idx].outptr, BUFSIZE - fdbufs[idx].outlen);
     if (r == -1)
         return -1;
 
-    fdbuf->outlen += r;
-    fdbuf->outptr += r;
+    fdbufs[idx].outlen += r;
+    fdbufs[idx].outptr += r;
 
     return r;
 }
 
 bool
-send_command(int fd, struct fdbuf *fdbuf, enum atcmd atcmd, union atdata atdata)
+send_command(int fd, int idx, enum atcmd atcmd, union atdata atdata)
 {
     ssize_t ret;
     fprintf(stderr, "send command\n");
     if (atcmd == ATD) {
-        ret = snprintf(fdbuf->in, BUFSIZE, atcmds[atcmd], atdata.dial.num);
+        ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd], atdata.dial.num);
     } else {
-        ret = snprintf(fdbuf->in, BUFSIZE, atcmds[atcmd]);
+        ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd]);
     }
     fprintf(stderr, "after data\n");
     if (ret >= BUFSIZE) {
         warn("AT command too long!");
         return false;
     }
-    fdbuf->inptr = fdbuf->in;
-    fdbuf->inlen = ret;
+    fdbufs[idx].inptr = fdbufs[idx].in;
+    fdbufs[idx].inlen = ret;
 
-    ret = fdbuf_write(fd, fdbuf);
+    ret = fdbuf_write(fd, idx);
     if (ret == -1) {
         warn("failed to write to backend!");
         return false;
     }
-    fprintf(stderr, "done writing: %d\n", fdbuf->inlen);
+    fprintf(stderr, "done writing: %d\n", fdbufs[idx].inlen);
     active_command = true;
     currentatcmd = atcmd;
     return true;
@@ -321,8 +323,6 @@ int main(int argc, char *argv[])
     if (sigintfd == -1)
         die("failed to create signalfd:");
 
-    /* this is used to store read data from fds, and length */
-    struct fdbuf fdbufs[MAX_FDS] = {0};
 
     for (int i = 0; i < MAX_FDS; i++)
         fds[i].fd = -1;
@@ -394,14 +394,14 @@ int main(int argc, char *argv[])
                 close(fds[i].fd);
                 fds[i].fd = -1;
             } else if (fds[i].revents & POLLIN) {
-                if (fdbuf_read(fds[i].fd, &fdbufs[i]) == -1) {
+                if (fdbuf_read(fds[i].fd, i) == -1) {
                     warn("failed to read from fd %d:", i);
                     break;
                 }
                 // parsecmd should parse as much as it can, letting us know how
                 // much was left unparsed so we can move it to the beginning of
                 // the buffer.
-                ret = cmdadd(i, fdbufs[i]);
+                ret = cmdadd(i);
                 if (ret != -1) {
                     assert(ret <= BUFSIZE);
                     fdbufs[i].outlen -= ret;
@@ -417,13 +417,13 @@ int main(int argc, char *argv[])
 
         if (fds[BACKEND].revents & POLLIN) {
             fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
-            ret = fdbuf_read(fds[BACKEND].fd, &fdbufs[BACKEND]);
+            ret = fdbuf_read(fds[BACKEND].fd, BACKEND);
             if (ret == -1) {
                 warn("failed to read from backend:");
                 break;
             }
 
-            ret = handle_resp(fds[cmd.index].fd, &fdbufs[BACKEND]);
+            ret = handle_resp(fds[cmd.index].fd, BACKEND);
             memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
             fdbufs[BACKEND].outlen -= ret;
             fdbufs[BACKEND].outptr -= ret;
@@ -441,7 +441,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "have a command!\n");
 
             if (check_call_status) {
-                if (!send_command(fds[BACKEND].fd, &fdbufs[BACKEND], CLCC, (union atdata){0}))
+                if (!send_command(fds[BACKEND].fd, BACKEND, CLCC, (union atdata){0}))
                     break;
                 handling_urc = true;
             } else {
@@ -449,7 +449,7 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "op: %d\n", cmd.op);
                 assert(cmd.op != CMD_NONE);
 
-                if (!send_command(fds[BACKEND].fd, &fdbufs[BACKEND], cmddata[cmd.op].atcmd, cmd.data))
+                if (!send_command(fds[BACKEND].fd, BACKEND, cmddata[cmd.op].atcmd, cmd.data))
                     break;
             }
 
