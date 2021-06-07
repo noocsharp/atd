@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "atd.h"
+#include "encdec.h"
 #include "util.h"
 #include "queue.h"
 
@@ -38,6 +39,19 @@
 
 #define BUFSIZE 256
 
+struct command_args cmddata[] = {
+    [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
+    [CMD_ANSWER] = { ATA, { TYPE_NONE} },
+    [CMD_HANGUP] = { ATH, { TYPE_NONE} },
+};
+
+char *atcmds[] = {
+	[ATD] = "ATD%s;\r",
+	[ATA] = "ATA\r",
+	[ATH] = "ATH\r",
+	[CLCC] = "AT+CLCC\r",
+};
+
 char *argv0;
 
 struct fdbuf {
@@ -59,26 +73,8 @@ int calld = -1;
 
 struct fdbuf fdbufs[MAX_FDS] = {0};
 
-#define MAX_CALLS 8
 struct call calls[MAX_CALLS];
 struct call calls2[MAX_CALLS];
-
-ssize_t
-parse_str(char *in, char **out)
-{
-    short len;
-    char *ptr = in;
-    len = ptr[0] + (ptr[1] << 8);
-    assert(len < BUFSIZE);
-    ptr += 2;
-
-    *out = malloc(len);
-    if (!(*out))
-        return -1;
-
-    memcpy(*out, ptr, len);
-    return len + 2;
-}
 
 /* add one command to queue, returns the number of bytes intepreted if the
  * command was validated and added successfully, -1 if the queue is full, -2 if
@@ -94,7 +90,7 @@ ssize_t cmdadd(int index) {
     cmd.op = *(ptr++);
     switch (cmd.op) {
     case CMD_DIAL:
-        count = parse_str(ptr, &cmd.data.dial.num);
+        count = dec_str(ptr, &cmd.data.dial.num);
         if (count == -1)
             return -1;
 
@@ -192,7 +188,7 @@ update_call_status()
         len = strlen(calls2[i].num);
         *ptr = len;
         strcpy(ptr + 1, calls2[i].num);
-        ptr += len;
+        ptr += len + 1;
 
         buf[1]++;
     }

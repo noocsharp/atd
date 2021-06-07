@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "atd.h"
+#include "encdec.h"
 
 int
 sendcode(int fd, int code)
@@ -47,6 +48,12 @@ dial(int fd, char *num)
 }
 
 int
+parse_callevent(int fd)
+{
+    struct call calls[MAX_CALLS];
+}
+
+int
 main(int argc, char *argv[])
 {
     enum ops cmd;
@@ -86,28 +93,32 @@ main(int argc, char *argv[])
 
     switch (cmd) {
     case CMD_DIAL:
-        dial(sock, argv[2]);
+        atd_cmd_dial(sock, argv[2]);
         break;
-    default:
-        sendcode(sock, cmd);
+    case CMD_HANGUP:
+        atd_cmd_hangup(sock);
+        break;
+    case CMD_ANSWER:
+        atd_cmd_answer(sock);
         break;
     }
 
-    char buf[1024];
+    char op;
 
-	if (cmd != CMD_CALL_EVENTS) {
-		read(sock, buf, 1);
-	} else {
-		read(sock, buf, 1024);
-	}
+    read(sock, &op, 1);
+    /*
+    if (op == STATUS_CALL) {
+        parse_callevent(fd);
+    }
+    */
 
-	if (*buf == STATUS_OK)
-		fprintf(stderr, "OK\n");
-	else if (*buf == STATUS_OK)
-		fprintf(stderr, "ERROR\n");
-	else if (*buf == STATUS_CALL) {
-		fprintf(stderr, "CALLSTATUS\n");
-	}
+    if (op == STATUS_OK)
+        fprintf(stderr, "OK\n");
+    else if (op == STATUS_OK)
+        fprintf(stderr, "ERROR\n");
+    else if (op == STATUS_CALL) {
+        fprintf(stderr, "CALLSTATUS\n");
+    }
 
     sleep(1);
 

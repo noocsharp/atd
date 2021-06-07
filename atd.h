@@ -1,7 +1,11 @@
+#ifndef ATD_H
+#define ATD_H
+
 #include <stdbool.h>
 
 #define PHONE_NUMBER_MAX_LEN 15
 #define DIALING_DIGITS "0123456789*#+ABC"
+#define MAX_CALLS 8
 
 /* should have at most 256 things */
 enum ops {
@@ -65,15 +69,7 @@ struct command_args {
     enum type type[MAX_PARAMS + 1];
 };
 
-struct command_args cmddata[] = {
-    [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
-    [CMD_ANSWER] = { ATA, { TYPE_NONE} },
-    [CMD_HANGUP] = { ATH, { TYPE_NONE} },
-};
+extern struct command_args cmddata[];
+extern char *atcmds[];
 
-char *atcmds[] = {
-	[ATD] = "ATD%s;\r",
-	[ATA] = "ATA\r",
-	[ATH] = "ATH\r",
-	[CLCC] = "AT+CLCC\r",
-};
+#endif
