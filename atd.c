@@ -75,7 +75,6 @@ struct fdbuf fdbufs[MAX_FDS] = {0};
 struct pollfd fds[MAX_FDS];
 
 struct call calls[MAX_CALLS];
-struct call calls2[MAX_CALLS];
 
 /* add one command to queue, returns the number of bytes intepreted if the
  * command was validated and added successfully, -1 if the queue is full, -2 if
@@ -154,54 +153,24 @@ parseclcc(char *start, size_t len)
 
     fprintf(stderr, "clcc: got %d successful matches\n", ret);
 
-    calls2[idx] = call;
+    calls[idx] = call;
 }
 
 /* [0] = STATUS_CALL
    [1] = # of update entries
    list of update entries follows
    update entry is a callstatus, followed by a string containing the phone number */
-void
+int
 update_call_status()
 {
-    fprintf(stderr, "update call status\n");
-    char buf[(PHONE_NUMBER_MAX_LEN + 2) * MAX_CALLS + 2];
-    char *ptr;
-    size_t len;
-    ssize_t ret;
-
-    if (calld < 0)
-        return;
-
-    buf[0] = STATUS_CALL;
-    buf[1] = 0;
-
-    ptr = buf + 2;
-
-    for (int i = 1; i < MAX_CALLS; i++) {
-        if (!(calls[i].present || calls2[i].present))
-            continue;
-
-        if ((calls[i].status == calls2[i].status) && strcmp(calls[i].num, calls2[i].num) == 0)
-            continue;
-        fprintf(stderr, "update POINT 0: %d, %s\n", i, calls2[i].num);
-
-        len = strlen(calls2[i].num);
-        *ptr = len;
-        strcpy(ptr + 1, calls2[i].num);
-        ptr += len + 1;
-
-        buf[1]++;
+    int status;
+    if (calld != -1) {
+        fprintf(stderr, "update call status\n");
+        status = atd_status_call(fds[calld].fd, calls, MAX_CALLS);
     }
 
-    fprintf(stderr, "update POINT 1: %d\n", ptr - buf);
-    memcpy(fdbufs[calld].inptr, buf, ptr - buf);
-    fdbufs[calld].inlen += ptr - buf;
-
-    fprintf(stderr, "update POINT 2\n");
-    memcpy(calls, calls2, MAX_CALLS*sizeof(calls[0]));
-    memset(calls2, 0, MAX_CALLS*sizeof(calls[0]));
-    fprintf(stderr, "update POINT 3\n");
+    memset(calls, 0, MAX_CALLS*sizeof(calls[0]));
+    return status;
 }
 
 size_t
@@ -227,8 +196,10 @@ handle_resp(int fd, int idx)
         if (handling_urc)
             handling_urc = false;
         if (currentatcmd == CLCC) {
-            update_call_status();
+            if (update_call_status() < 0)
+                fprintf(stderr, "failed to update call status\n");
             check_call_status = false;
+            return ptr - fdbufs[idx].out;
         }
         fprintf(stderr, "got OK\n");
     } else if (strncmp(start, "ERROR", sizeof("ERROR") - 1) == 0) {

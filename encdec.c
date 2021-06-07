@@ -49,10 +49,25 @@ enc_str(char *buf, char *str)
 int
 xwrite(int fd, char *buf, size_t len)
 {
-    char *ptr;
+    char *ptr = buf;
     ssize_t ret;
     while (len) {
-        ret = write(fd, buf, len);
+        ret = write(fd, ptr, len);
+        if (ret == -1)
+            return -1;
+
+        len -= ret;
+        ptr += ret;
+    }
+}
+
+int
+xread(int fd, char *buf, size_t len)
+{
+    char *ptr = buf;
+    ssize_t ret;
+    while (len) {
+        ret = read(fd, ptr, len);
         if (ret == -1)
             return -1;
 
@@ -96,7 +111,7 @@ atd_cmd_call_events(int fd)
 int
 atd_status_call(int fd, struct call *calls, size_t len)
 {
-    char buf[(PHONE_NUMBER_MAX_LEN + 2) * MAX_CALLS + 2];
+    char buf[(PHONE_NUMBER_MAX_LEN + 3) * MAX_CALLS + 2];
     char *ptr;
     ssize_t ret;
 
@@ -109,10 +124,54 @@ atd_status_call(int fd, struct call *calls, size_t len)
         if (!(calls[i].present))
             continue;
 
+        *(ptr++) = i;
+        *(ptr++) = calls[i].status;
         ptr += enc_str(ptr, calls[i].num);
 
         buf[1]++;
     }
 
     return xwrite(fd, buf, ptr - buf);
+}
+
+/* calls should be MAX_CALLS long */
+int
+dec_call_status(int fd, struct call *calls)
+{
+    char count = 0, idx = 0, status = 0;
+    unsigned short len = 0;
+    ssize_t ret;
+    char buf[PHONE_NUMBER_MAX_LEN];
+    ret = xread(fd, &count, 1);
+
+    if (ret == -1 || count > MAX_CALLS)
+        return -1;
+
+    for (int i = 0; i < count; i++) {
+        ret = xread(fd, &idx, 1);
+        if (ret == -1 || idx > MAX_CALLS - 1)
+            return -1;
+
+        ret = xread(fd, &status, 1);
+        if (ret == -1 || status > CALL_WAITING)
+            return -1;
+
+        ret = xread(fd, buf, 2);
+        if (ret == -1)
+            return -1;
+
+        len = dec_short(buf);
+        if (len > PHONE_NUMBER_MAX_LEN)
+            return -1;
+
+        ret = xread(fd, buf, len);
+        if (ret == -1)
+            return -1;
+
+        calls[idx].present = true;
+        calls[idx].status = status;
+        memcpy(calls[idx].num, buf, len);
+    }
+
+    return 0;
 }

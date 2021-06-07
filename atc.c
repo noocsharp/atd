@@ -7,51 +7,7 @@
 #include "atd.h"
 #include "encdec.h"
 
-int
-sendcode(int fd, int code)
-{
-    char c = code;
-    /* TODO make more robust */
-    int ret = write(fd, &c, 1);
-    if (ret == -1)
-        return -1;
-}
-
-int
-dial(int fd, char *num)
-{
-    int ret, len = strlen(num), left;
-    char buf[PHONE_NUMBER_MAX_LEN + 3];
-    char *ptr;
-
-    if (len > PHONE_NUMBER_MAX_LEN)
-        return -1;
-
-    buf[0] = CMD_DIAL;
-    buf[1] = len & 0xFF;
-    buf[2] = (len >> 8) & 0xFF;
-
-    memcpy(buf + 3, num, len);
-
-    left = len + 3;
-    ptr = buf;
-
-    do {
-        ret = write(fd, ptr, left);
-        if (ret == -1)
-            return -1;
-        ptr += ret;
-        left -= ret;
-    } while (left);
-
-    return 0;
-}
-
-int
-parse_callevent(int fd)
-{
-    struct call calls[MAX_CALLS];
-}
+struct call calls[MAX_CALLS];
 
 int
 main(int argc, char *argv[])
@@ -101,23 +57,29 @@ main(int argc, char *argv[])
     case CMD_ANSWER:
         atd_cmd_answer(sock);
         break;
+    case CMD_CALL_EVENTS:
+        atd_cmd_call_events(sock);
+        break;
     }
 
     char op;
 
     read(sock, &op, 1);
-    /*
     if (op == STATUS_CALL) {
-        parse_callevent(fd);
+        dec_call_status(sock, calls);
     }
-    */
 
     if (op == STATUS_OK)
         fprintf(stderr, "OK\n");
     else if (op == STATUS_OK)
         fprintf(stderr, "ERROR\n");
     else if (op == STATUS_CALL) {
-        fprintf(stderr, "CALLSTATUS\n");
+        for (int i = 0; i < MAX_CALLS; i++) {
+            if (!calls[i].present)
+                continue;
+
+            fprintf(stderr, "status: %s, %d", calls[i].num, calls[i].status);
+        }
     }
 
     sleep(1);
