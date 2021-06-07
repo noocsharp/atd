@@ -46,10 +46,10 @@ struct command_args cmddata[] = {
 };
 
 char *atcmds[] = {
-	[ATD] = "ATD%s;\r",
-	[ATA] = "ATA\r",
-	[ATH] = "ATH\r",
-	[CLCC] = "AT+CLCC\r",
+    [ATD] = "ATD%s;\r",
+    [ATA] = "ATA\r",
+    [ATH] = "ATH\r",
+    [CLCC] = "AT+CLCC\r",
 };
 
 char *argv0;
@@ -72,6 +72,7 @@ enum atcmd currentatcmd;
 int calld = -1;
 
 struct fdbuf fdbufs[MAX_FDS] = {0};
+struct pollfd fds[MAX_FDS];
 
 struct call calls[MAX_CALLS];
 struct call calls2[MAX_CALLS];
@@ -263,9 +264,9 @@ handle_resp(int fd, int idx)
 }
 
 ssize_t
-fdbuf_write(int fd, int idx)
+fdbuf_write(int idx)
 {
-    int wr = write(fd, &fdbufs[idx].in, fdbufs[idx].inlen);
+    int wr = write(fds[idx].fd, &fdbufs[idx].in, fdbufs[idx].inlen);
     if (wr == -1)
         return -1;
 
@@ -277,9 +278,9 @@ fdbuf_write(int fd, int idx)
 }
 
 ssize_t
-fdbuf_read(int fd, int idx)
+fdbuf_read(int idx)
 {
-    int r = read(fd, fdbufs[idx].outptr, BUFSIZE - fdbufs[idx].outlen);
+    int r = read(fds[idx].fd, fdbufs[idx].outptr, BUFSIZE - fdbufs[idx].outlen);
     if (r == -1)
         return -1;
 
@@ -290,7 +291,7 @@ fdbuf_read(int fd, int idx)
 }
 
 bool
-send_command(int fd, int idx, enum atcmd atcmd, union atdata atdata)
+send_command(int idx, enum atcmd atcmd, union atdata atdata)
 {
     ssize_t ret;
     fprintf(stderr, "send command\n");
@@ -307,7 +308,7 @@ send_command(int fd, int idx, enum atcmd atcmd, union atdata atdata)
     fdbufs[idx].inptr = fdbufs[idx].in;
     fdbufs[idx].inlen = ret;
 
-    ret = fdbuf_write(fd, idx);
+    ret = fdbuf_write(idx);
     if (ret == -1) {
         warn("failed to write to backend!");
         return false;
@@ -354,7 +355,6 @@ int main(int argc, char *argv[])
     };
     struct command cmd;
     ssize_t ret = 0;
-    struct pollfd fds[MAX_FDS];
     sigset_t mask;
     char *next;
 
@@ -441,7 +441,7 @@ int main(int argc, char *argv[])
                 if (i == calld)
                     calld = -1;
             } else if (fds[i].revents & POLLIN) {
-                if (fdbuf_read(fds[i].fd, i) == -1) {
+                if (fdbuf_read(i) == -1) {
                     warn("failed to read from fd %d:", i);
                     break;
                 }
@@ -460,7 +460,7 @@ int main(int argc, char *argv[])
                     break;
                 }
             } else if (fds[i].revents & POLLOUT) {
-                if (fdbuf_write(fds[i].fd, i) == -1) {
+                if (fdbuf_write(i) == -1) {
                     warn("failed to write to fd %d:", i);
                     break;
                 }
@@ -472,7 +472,7 @@ int main(int argc, char *argv[])
 
         if (fds[BACKEND].revents & POLLIN) {
             fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
-            ret = fdbuf_read(fds[BACKEND].fd, BACKEND);
+            ret = fdbuf_read(BACKEND);
             if (ret == -1) {
                 warn("failed to read from backend:");
                 break;
@@ -500,7 +500,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "have a command!\n");
 
             if (check_call_status) {
-                if (!send_command(fds[BACKEND].fd, BACKEND, CLCC, (union atdata){0}))
+                if (!send_command(BACKEND, CLCC, (union atdata){0}))
                     break;
                 handling_urc = true;
             } else {
@@ -508,7 +508,7 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "op: %d\n", cmd.op);
                 assert(cmd.op != CMD_NONE);
 
-                if (!send_command(fds[BACKEND].fd, BACKEND, cmddata[cmd.op].atcmd, cmd.data))
+                if (!send_command(BACKEND, cmddata[cmd.op].atcmd, cmd.data))
                     break;
             }
 
