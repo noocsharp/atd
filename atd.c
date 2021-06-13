@@ -66,8 +66,6 @@ struct fdbuf {
 struct command currentcmd;
 int cmd_progress;
 bool active_command = false;
-bool check_call_status = false;
-bool handling_urc = false;
 enum atcmd currentatcmd;
 int calld = -1;
 
@@ -135,7 +133,7 @@ send_status(int fd, enum status status)
     return 0;
 }
 
-struct call
+void
 parseclcc(char *start, size_t len)
 {
     unsigned char idx;
@@ -143,17 +141,17 @@ parseclcc(char *start, size_t len)
     unsigned char stat;
     unsigned char mode;
     unsigned char mpty;
-    char number[PHONE_NUMBER_MAX_LEN];
     unsigned char type;
     unsigned char alpha;
 
-    struct call call = { .present = true };
+    struct call call;
 
     int ret = sscanf(start, "+CLCC: %hhu,%hhu,%hhu,%hhu,%hhu,\"%[+1234567890ABCD]\",%hhu,%hhu", &idx, &dir, &call.status, &mode, &mpty, call.num, &type, &alpha);
 
     fprintf(stderr, "clcc: got %d successful matches\n", ret);
 
-    calls[idx] = call;
+    if (ret == 8)
+        calls[idx] = call;
 }
 
 /* [0] = STATUS_CALL
@@ -161,45 +159,79 @@ parseclcc(char *start, size_t len)
    list of update entries follows
    update entry is a callstatus, followed by a string containing the phone number */
 int
-update_call_status()
+send_call_status(enum callstatus status, char *num)
 {
-    int status;
     if (calld != -1) {
         fprintf(stderr, "update call status\n");
-        status = atd_status_call(fds[calld].fd, calls, MAX_CALLS);
+        return atd_status_call(fds[calld].fd, status, num);
     }
 
-    memset(calls, 0, MAX_CALLS*sizeof(calls[0]));
-    return status;
+    return 0;
+}
+
+int
+send_clip(char *start, size_t len)
+{
+    char number[PHONE_NUMBER_MAX_LEN + 1];
+    int ret = sscanf(start, "+CLIP: \"%[+1234567890ABCD]\"", number);
+    if (ret != 1)
+        return -1;
+
+    return send_call_status(CALL_INCOMING, number);
+}
+
+int
+send_colp(char *start, size_t len)
+{
+    char number[PHONE_NUMBER_MAX_LEN + 1];
+    int ret = sscanf(start, "+COLP: \"%[+1234567890ABCD]\"", number);
+    if (ret != 1)
+        return -1;
+
+    return send_call_status(CALL_ANSWERED, number);
+}
+
+int
+lprint(char *buf, size_t len)
+{
+    for (int i = 0; i < len; i++) {
+        if (buf[i] == '\n') {
+            puts("<LF>");
+        } else if (buf[i] == '\r') {
+            puts("<CR>");
+        } else {
+            putchar(buf[i]);
+        }
+    }
 }
 
 size_t
 handle_resp(int fd, int idx)
 {
     fprintf(stderr, "handle_resp start\n");
-    char *start = fdbufs[idx].out, *ptr = memmem(fdbufs[idx].out, fdbufs[idx].outlen, "\r\n", 2);
+    char *start = fdbufs[idx].out, *ptr = memchr(fdbufs[idx].out, '\n', fdbufs[idx].outlen);
     enum status status = 0;
+
+    lprint(fdbufs[idx].out, fdbufs[idx].outlen);
 
     if (ptr == NULL)
         return 0;
 
-    // find next line with content
-    while (start == ptr) {
-        ptr += sizeof("\r\n") - 1;
-        start = ptr;
-        ptr = memmem(start, fdbufs[idx].outlen - (ptr - fdbufs[idx].out), "\r\n", 2);
-    }
+    fprintf(stderr, "handle_resp ptr not null\n");
+
+    if (ptr - start == 1 && memcmp(start, "\n", 1) == 0)
+    	return 1;
+    else if (ptr - start == 2 && memcmp(start, "\r\n", 2) == 0)
+    	return 2;
+
+    fprintf(stderr, "handle_resp line has content\n");
 
     if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
         status = STATUS_OK;
         active_command = false;
-        if (handling_urc)
-            handling_urc = false;
-        if (currentatcmd == CLCC) {
-            if (update_call_status() < 0)
-                fprintf(stderr, "failed to update call status\n");
-            check_call_status = false;
-            return ptr - fdbufs[idx].out;
+        if (currentatcmd == ATD) {
+            if (send_call_status(CALL_DIALING, currentcmd.data.dial.num) < 0)
+                fprintf(stderr, "failed to send call status\n");
         }
         fprintf(stderr, "got OK\n");
     } else if (strncmp(start, "ERROR", sizeof("ERROR") - 1) == 0) {
@@ -207,28 +239,36 @@ handle_resp(int fd, int idx)
         active_command = false;
         fprintf(stderr, "got ERROR\n");
     } else if (strncmp(start, "NO CARRIER", sizeof("NO CARRIER") - 1) == 0) {
-        check_call_status = true;
-        fprintf(stderr, "got NO CARRIER\n");
+        if (currentcmd.op == CMD_ANSWER || currentcmd.op == CMD_DIAL) {
+            active_command = false;
+            status = STATUS_ERROR;
+        }
+
+        if (send_call_status(CALL_INACTIVE, "") < 0) {
+            fprintf(stderr, "failed to send call status\n");
+        }
     } else if (strncmp(start, "RING", sizeof("RING") - 1) == 0) {
-        check_call_status = true;
         fprintf(stderr, "got RING\n");
     } else if (strncmp(start, "CONNECT", sizeof("CONNECT") - 1) == 0) {
-        check_call_status = true;
         fprintf(stderr, "got CONNECT\n");
     } else if (strncmp(start, "BUSY", sizeof("BUSY") - 1) == 0) {
-        check_call_status = true;
         fprintf(stderr, "got BUSY\n");
     } else if (strncmp(start, "+CLCC", sizeof("+CLCC") - 1) == 0) {
+    	assert(0);
         fprintf(stderr, "got +CLCC\n");
-        assert(check_call_status);
 
-        struct call call = parseclcc(start, ptr - start);
+        parseclcc(start, ptr - start);
+    } else if (strncmp(start, "+CLIP", sizeof("+CLIP") - 1) == 0) {
+        fprintf(stderr, "got +CLIP\n");
+
+        send_clip(start, ptr - start);
     }
+
 
     if (status && fd > 0)
         send_status(fd, status);
 
-    ptr += 2;
+    ptr += 1;
 
     fprintf(stderr, "handle_resp: %d\n", ptr - fdbufs[idx].out);
     return ptr - fdbufs[idx].out;
@@ -265,13 +305,12 @@ bool
 send_command(int idx, enum atcmd atcmd, union atdata atdata)
 {
     ssize_t ret;
-    fprintf(stderr, "send command\n");
+    fprintf(stderr, "send command: %d\n", atcmd);
     if (atcmd == ATD) {
         ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd], atdata.dial.num);
     } else {
         ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd]);
     }
-    fprintf(stderr, "after data\n");
     if (ret >= BUFSIZE) {
         warn("AT command too long!");
         return false;
@@ -284,7 +323,6 @@ send_command(int idx, enum atcmd atcmd, union atdata atdata)
         warn("failed to write to backend!");
         return false;
     }
-    fprintf(stderr, "done writing: %d\n", fdbufs[idx].inlen);
     active_command = true;
     currentatcmd = atcmd;
     return true;
@@ -420,6 +458,7 @@ int main(int argc, char *argv[])
                 // much was left unparsed so we can move it to the beginning of
                 // the buffer.
                 ret = cmdadd(i);
+                fprintf(stderr, "currentcmd:\n", currentcmd.op);
                 if (ret != -1) {
                     assert(ret <= BUFSIZE);
                     fdbufs[i].outlen -= ret;
@@ -442,46 +481,34 @@ int main(int argc, char *argv[])
         }
 
         if (fds[BACKEND].revents & POLLIN) {
-            fprintf(stderr, "len: %d\n", fdbufs[BACKEND].outlen);
             ret = fdbuf_read(BACKEND);
             if (ret == -1) {
                 warn("failed to read from backend:");
                 break;
             }
+        }
 
-            /* TODO should this be here? */
-            if (check_call_status)
-                POLLADD(fds[calld], POLLOUT);
-
+        while (fdbufs[BACKEND].outlen) {
             ret = handle_resp(fds[cmd.index].fd, BACKEND);
+            if (ret == 0)
+            	break;
+
             memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
             fdbufs[BACKEND].outlen -= ret;
             fdbufs[BACKEND].outptr -= ret;
         }
 
-        /* note that this doesn't take effect until the next poll cycle...
-         * maybe this can be replaced with something more integrated? */
-        if ((cmdq.count || check_call_status) && !active_command)
-            POLLADD(fds[BACKEND], POLLOUT);
-        else
-            POLLDROP(fds[BACKEND], POLLOUT);
-
         /* send next command to modem */
         if (fds[BACKEND].revents & POLLOUT) {
             fprintf(stderr, "have a command!\n");
 
-            if (check_call_status) {
-                if (!send_command(BACKEND, CLCC, (union atdata){0}))
-                    break;
-                handling_urc = true;
-            } else {
-                cmd = command_dequeue();
-                fprintf(stderr, "op: %d\n", cmd.op);
-                assert(cmd.op != CMD_NONE);
+            cmd = command_dequeue();
+            assert(cmd.op != CMD_NONE);
 
-                if (!send_command(BACKEND, cmddata[cmd.op].atcmd, cmd.data))
-                    break;
-            }
+            if (!send_command(BACKEND, cmddata[cmd.op].atcmd, cmd.data))
+                break;
+
+            currentcmd = cmd;
 
             /* don't write any more until we hear back */
             if (fdbufs[BACKEND].inlen == 0) {
@@ -508,6 +535,13 @@ int main(int argc, char *argv[])
                 break;
             }
         }
+
+        /* note that this doesn't take effect until the next poll cycle...
+         * maybe this can be replaced with something more integrated? */
+        if (cmdq.count && !active_command)
+            POLLADD(fds[BACKEND], POLLOUT);
+        else
+            POLLDROP(fds[BACKEND], POLLOUT);
     }
 
 error:

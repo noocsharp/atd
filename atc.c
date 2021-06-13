@@ -7,8 +7,6 @@
 #include "atd.h"
 #include "encdec.h"
 
-struct call calls[MAX_CALLS];
-
 int
 main(int argc, char *argv[])
 {
@@ -65,21 +63,12 @@ main(int argc, char *argv[])
     char op;
 
     read(sock, &op, 1);
-    if (op == STATUS_CALL) {
-        dec_call_status(sock, calls);
-    }
 
     if (op == STATUS_OK)
         fprintf(stderr, "OK\n");
     else if (op == STATUS_OK)
         fprintf(stderr, "ERROR\n");
     else if (op == STATUS_CALL) {
-        for (int i = 0; i < MAX_CALLS; i++) {
-            if (!calls[i].present)
-                continue;
-
-            fprintf(stderr, "status: %s, %d", calls[i].num, calls[i].status);
-        }
     }
 
     sleep(1);

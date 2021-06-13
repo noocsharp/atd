@@ -109,69 +109,48 @@ atd_cmd_call_events(int fd)
 }
 
 int
-atd_status_call(int fd, struct call *calls, size_t len)
+atd_status_call(int fd, enum callstatus status, char *num)
 {
-    char buf[(PHONE_NUMBER_MAX_LEN + 3) * MAX_CALLS + 2];
+    char buf[4 + strlen(num)];
     char *ptr;
     ssize_t ret;
 
     buf[0] = STATUS_CALL;
-    buf[1] = 0;
+    buf[1] = status;
 
     ptr = buf + 2;
-
-    for (int i = 0; i < len; i++) {
-        if (!(calls[i].present))
-            continue;
-
-        *(ptr++) = i;
-        *(ptr++) = calls[i].status;
-        ptr += enc_str(ptr, calls[i].num);
-
-        buf[1]++;
-    }
+    ptr += enc_str(ptr, num);
 
     return xwrite(fd, buf, ptr - buf);
 }
 
 /* calls should be MAX_CALLS long */
 int
-dec_call_status(int fd, struct call *calls)
+dec_call_status(int fd, struct call *call)
 {
-    char count = 0, idx = 0, status = 0;
+    char status = 0;
     unsigned short len = 0;
     ssize_t ret;
     char buf[PHONE_NUMBER_MAX_LEN];
-    ret = xread(fd, &count, 1);
 
-    if (ret == -1 || count > MAX_CALLS)
+    ret = xread(fd, (char *) &call->status, 1);
+    if (ret == -1 || status >= CALL_LAST)
         return -1;
 
-    for (int i = 0; i < count; i++) {
-        ret = xread(fd, &idx, 1);
-        if (ret == -1 || idx > MAX_CALLS - 1)
-            return -1;
+    ret = xread(fd, buf, 2);
+    if (ret == -1)
+        return -1;
 
-        ret = xread(fd, &status, 1);
-        if (ret == -1 || status > CALL_WAITING)
-            return -1;
+    len = dec_short(buf);
+    if (len > PHONE_NUMBER_MAX_LEN)
+        return -1;
 
-        ret = xread(fd, buf, 2);
-        if (ret == -1)
-            return -1;
+    if (len == 0)
+    	return 0;
 
-        len = dec_short(buf);
-        if (len > PHONE_NUMBER_MAX_LEN)
-            return -1;
-
-        ret = xread(fd, buf, len);
-        if (ret == -1)
-            return -1;
-
-        calls[idx].present = true;
-        calls[idx].status = status;
-        memcpy(calls[idx].num, buf, len);
-    }
+    ret = xread(fd, call->num, len);
+    if (ret == -1)
+        return -1;
 
     return 0;
 }

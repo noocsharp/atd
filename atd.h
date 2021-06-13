@@ -20,9 +20,10 @@ enum callstatus {
     CALL_ACTIVE,
     CALL_HELD,
     CALL_DIALING,
-    CALL_ALERTING,
     CALL_INCOMING,
-    CALL_WAITING,
+    CALL_ANSWERED,
+    CALL_INACTIVE,
+    CALL_LAST,
 };
 
 enum status {
@@ -51,9 +52,8 @@ struct command {
 };
 
 struct call {
-    bool present;
 	enum callstatus status;
-	char num[PHONE_NUMBER_MAX_LEN];
+	char num[PHONE_NUMBER_MAX_LEN + 1];
 };
 
 
@@ -68,8 +68,5 @@ struct command_args {
 	enum atcmd atcmd;
     enum type type[MAX_PARAMS + 1];
 };
-
-extern struct command_args cmddata[];
-extern char *atcmds[];
 
 #endif
