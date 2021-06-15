@@ -33,6 +33,7 @@ enum status {
 };
 
 enum atcmd {
+	ATNONE,
 	ATD,
 	ATA,
 	ATH,

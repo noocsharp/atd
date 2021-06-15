@@ -233,6 +233,9 @@ handle_resp(int fd, int idx)
             if (send_call_status(CALL_DIALING, currentcmd.data.dial.num) < 0)
                 fprintf(stderr, "failed to send call status\n");
         }
+
+        currentcmd.op = CMD_NONE;
+        currentatcmd = ATNONE;
         fprintf(stderr, "got OK\n");
     } else if (strncmp(start, "ERROR", sizeof("ERROR") - 1) == 0) {
         status = STATUS_ERROR;
@@ -242,6 +245,8 @@ handle_resp(int fd, int idx)
         if (currentcmd.op == CMD_ANSWER || currentcmd.op == CMD_DIAL) {
             active_command = false;
             status = STATUS_ERROR;
+            currentcmd.op = CMD_NONE;
+            currentatcmd = ATNONE;
         }
 
         if (send_call_status(CALL_INACTIVE, "") < 0) {
