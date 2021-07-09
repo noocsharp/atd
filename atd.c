@@ -360,6 +360,9 @@ int main(int argc, char *argv[])
 {
     argv0 = argv[0];
 
+    if (argc != 2)
+        die("exactly 2 arguments required\n");
+
     struct sockaddr_un sockaddr = {
         .sun_family = AF_UNIX,
         .sun_path = ATD_SOCKET ,
@@ -402,7 +405,11 @@ int main(int argc, char *argv[])
         goto error;
     }
 #else
-    backsock = open("/dev/ttyUSB2", O_RDWR | O_NOCTTY);
+    backsock = open(argv[1], O_RDWR | O_NOCTTY);
+    if (backsock == -1) {
+        warn("failed to connect to tty:");
+        goto error;
+    }
 #endif
 
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
