@@ -400,6 +400,11 @@ int main(int argc, char *argv[])
         goto error;
     }
 
+    const int val = 1;
+    if (setsockopt(backsock, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) == -1) {
+        warn("failed to set SO_REUSEADDR:");
+    }
+
     if (connect(backsock, (struct sockaddr *) &backaddr, sizeof(backaddr)) == -1) {
         warn("failed to connect to backend:");
         goto error;
