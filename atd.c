@@ -39,6 +39,8 @@
 
 #define BUFSIZE 256
 
+char *startup = "AT+CLIP=1\r";
+
 struct command_args cmddata[] = {
     [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
     [CMD_ANSWER] = { ATA, { TYPE_NONE} },
@@ -430,6 +432,9 @@ int main(int argc, char *argv[])
     fdbufs[BACKEND].outptr = fdbufs[BACKEND].out;
     fds[SIGNALINT].fd = sigintfd;
     fds[SIGNALINT].events = POLLIN;
+
+    if (xwrite(backsock, startup, sizeof(startup)) == -1)
+        goto error;
 
     while (true) {
         if (poll(fds, sizeof(fds) / sizeof(fds[0]), -1) == -1) {
