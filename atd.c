@@ -39,7 +39,7 @@
 
 #define BUFSIZE 256
 
-char *startup = "AT+CLIP=1\r";
+char *startup = "AT+CLIP=1\rAT+COLP=1\r";
 
 struct command_args cmddata[] = {
     [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
