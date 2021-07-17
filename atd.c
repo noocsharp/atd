@@ -32,8 +32,8 @@
 
 
 #define LISTENER 3
-#define BACKEND 5
-#define SIGNALINT 6
+#define BACKEND 4
+#define SIGNALINT 5
 #define RSRVD_FDS 6
 #define MAX_FDS 16
 
@@ -135,27 +135,6 @@ send_status(int fd, enum status status)
     return 0;
 }
 
-void
-parseclcc(char *start, size_t len)
-{
-    unsigned char idx;
-    unsigned char dir;
-    unsigned char stat;
-    unsigned char mode;
-    unsigned char mpty;
-    unsigned char type;
-    unsigned char alpha;
-
-    struct call call;
-
-    int ret = sscanf(start, "+CLCC: %hhu,%hhu,%hhu,%hhu,%hhu,\"%[+1234567890ABCD]\",%hhu,%hhu", &idx, &dir, &call.status, &mode, &mpty, call.num, &type, &alpha);
-
-    fprintf(stderr, "clcc: got %d successful matches\n", ret);
-
-    if (ret == 8)
-        calls[idx] = call;
-}
-
 /* [0] = STATUS_CALL
    [1] = # of update entries
    list of update entries follows
@@ -210,23 +189,23 @@ lprint(char *buf, size_t len)
 size_t
 handle_resp(int fd, int idx)
 {
-    fprintf(stderr, "handle_resp start\n");
-    char *start = fdbufs[idx].out, *ptr = memchr(fdbufs[idx].out, '\n', fdbufs[idx].outlen);
+    fprintf(stderr, "%s\n", __func__);
+    char *start = fdbufs[idx].out, *ptr;
     enum status status = 0;
 
-    lprint(fdbufs[idx].out, fdbufs[idx].outlen);
+    /* ignore lines without content */
+    if (memcmp(start, "\n", 1) == 0)
+        return 1;
+    else if (memcmp(start, "\r\n", 2) == 0)
+        return 2;
 
+    ptr = memchr(fdbufs[idx].out, '\n', fdbufs[idx].outlen);
     if (ptr == NULL)
         return 0;
 
-    fprintf(stderr, "handle_resp ptr not null\n");
+    lprint(start, ptr - start);
 
-    if (ptr - start == 1 && memcmp(start, "\n", 1) == 0)
-    	return 1;
-    else if (ptr - start == 2 && memcmp(start, "\r\n", 2) == 0)
-    	return 2;
-
-    fprintf(stderr, "handle_resp line has content\n");
+    size_t length = 1 + ptr - fdbufs[idx].out;
 
     if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
         status = STATUS_OK;
@@ -260,25 +239,22 @@ handle_resp(int fd, int idx)
         fprintf(stderr, "got CONNECT\n");
     } else if (strncmp(start, "BUSY", sizeof("BUSY") - 1) == 0) {
         fprintf(stderr, "got BUSY\n");
-    } else if (strncmp(start, "+CLCC", sizeof("+CLCC") - 1) == 0) {
-    	assert(0);
-        fprintf(stderr, "got +CLCC\n");
-
-        parseclcc(start, ptr - start);
     } else if (strncmp(start, "+CLIP", sizeof("+CLIP") - 1) == 0) {
         fprintf(stderr, "got +CLIP\n");
 
         send_clip(start, ptr - start);
+    } else if (strncmp(start, "+COLP", sizeof("+COLP") - 1) == 0) {
+        fprintf(stderr, "got +COLP\n");
+
+        send_colp(start, ptr - start);
     }
 
 
     if (status && fd > 0)
         send_status(fd, status);
 
-    ptr += 1;
-
-    fprintf(stderr, "handle_resp: %d\n", ptr - fdbufs[idx].out);
-    return ptr - fdbufs[idx].out;
+    fprintf(stderr, "%s: %d\n", __func__, length);
+    return length;
 }
 
 ssize_t
@@ -460,6 +436,7 @@ int main(int argc, char *argv[])
             break;
         }
 
+        /* handle clients */
         for (int i = RSRVD_FDS; i < MAX_FDS; i++) {
             if (fds[i].fd == -1)
                 continue;
@@ -480,7 +457,7 @@ int main(int argc, char *argv[])
                 // much was left unparsed so we can move it to the beginning of
                 // the buffer.
                 ret = cmdadd(i);
-                fprintf(stderr, "currentcmd:\n", currentcmd.op);
+
                 if (ret != -1) {
                     assert(ret <= BUFSIZE);
                     fdbufs[i].outlen -= ret;
@@ -513,7 +490,7 @@ int main(int argc, char *argv[])
         while (fdbufs[BACKEND].outlen) {
             ret = handle_resp(fds[cmd.index].fd, BACKEND);
             if (ret == 0)
-            	break;
+                break;
 
             memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
             fdbufs[BACKEND].outlen -= ret;
