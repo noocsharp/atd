@@ -39,7 +39,7 @@
 
 #define BUFSIZE 256
 
-char *startup = "AT+CLIP=1\rAT+COLP=1\r";
+char *startup[] = { "AT+CLIP=1\r", "AT+COLP=1\r" };
 
 struct command_args cmddata[] = {
     [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
@@ -421,8 +421,22 @@ int main(int argc, char *argv[])
     fds[SIGNALINT].fd = sigintfd;
     fds[SIGNALINT].events = POLLIN;
 
-    if (xwrite(backsock, startup, sizeof(startup)) == -1)
-        goto error;
+    char startupresp[256];
+
+    fprintf(stderr, "%d startup commands\n", sizeof(startup));
+    for (int i = 0; i < sizeof(startup) / sizeof(startup[0]); i++) {
+        fprintf(stderr, "startup: %s, %i\n", startup[i], i);
+        ret = xwrite(fds[BACKEND].fd, startup[i], strlen(startup[i]));
+        if (ret == -1)
+            goto error;
+
+        ret = read(fds[BACKEND].fd, startupresp, sizeof(startupresp));
+        if (ret == -1)
+            goto error;
+
+        fprintf(stderr, startupresp);
+        memset(startupresp, 0, sizeof(startupresp));
+    }
 
     while (true) {
         if (poll(fds, sizeof(fds) / sizeof(fds[0]), -1) == -1) {
