@@ -6,3 +6,4 @@ int atd_status_call(int fd, enum callstatus status, char *num);
 ssize_t dec_str(char *in, char **out);
 int dec_call_status(int fd, struct call *calls);
 int xwrite(int fd, char *buf, size_t len);
+int xread(int fd, char *buf, size_t len);
