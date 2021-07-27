@@ -189,7 +189,6 @@ lprint(char *buf, size_t len)
 size_t
 handle_resp(int fd, int idx)
 {
-    fprintf(stderr, "%s\n", __func__);
     char *start = fdbufs[idx].out, *ptr;
     enum status status = 0;
 
@@ -253,7 +252,7 @@ handle_resp(int fd, int idx)
     if (status && fd > 0)
         send_status(fd, status);
 
-    fprintf(stderr, "%s: %d\n", __func__, length);
+    fprintf(stderr, "%s: %.*s\n", __func__, length, start);
     return length;
 }
 
