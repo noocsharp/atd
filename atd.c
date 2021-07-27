@@ -1,5 +1,3 @@
-#define _GNU_SOURCE // memmem
-
 #include <assert.h>
 #include <poll.h>
 #include <stdbool.h>
