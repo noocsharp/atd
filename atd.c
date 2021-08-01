@@ -461,9 +461,9 @@ int main(int argc, char *argv[])
 
     char startupresp[256];
 
-    fprintf(stderr, "%d startup commands\n", sizeof(startup));
+    fprintf(stderr, "atd: %d startup commands\n", sizeof(startup) / sizeof(startup[0]));
     for (int i = 0; i < sizeof(startup) / sizeof(startup[0]); i++) {
-        fprintf(stderr, "startup: %s, %i\n", startup[i], i);
+        fprintf(stderr, "atd startup: %s, %i\n", startup[i], i);
         ret = xwrite(fds[BACKEND].fd, startup[i], strlen(startup[i]));
         if (ret == -1)
             goto error;
