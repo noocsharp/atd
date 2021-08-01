@@ -37,6 +37,8 @@
 
 #define BUFSIZE 256
 
+int curline_len;
+
 char *startup[] = { "AT+CLIP=1\r", "AT+COLP=1\r", "AT+CNMI=2,2,0,1,0" };
 
 struct command_args cmddata[] = {
@@ -184,25 +186,60 @@ lprint(char *buf, size_t len)
     }
 }
 
-size_t
-handle_resp(int fd, int idx)
+static int
+memcspn(const char *mem, const char *invalid, int n)
 {
-    char *start = fdbufs[idx].out, *ptr;
+    for (int i = 0; i < n; i++) {
+        if (strchr(invalid, mem[i]))
+            return i;
+    }
+
+    return -1;
+}
+
+static int
+memspn(const char *mem, const char *valid, int n)
+{
+    for (int i = 0; i < n; i++) {
+        if (!strchr(valid, mem[i]))
+            return i;
+    }
+
+    return n;
+}
+
+int
+nextline()
+{
+    fprintf(stderr, "%s start\n", __func__);
+    char *start = fdbufs[BACKEND].out;
+    int total = 0, ret;
+
+    do {
+        total += curline_len;
+        memmove(start, fdbufs[BACKEND].out + curline_len, fdbufs[BACKEND].outlen - curline_len);
+        fdbufs[BACKEND].outlen -= curline_len;
+        fdbufs[BACKEND].outptr -= curline_len;
+        curline_len = memcspn(start, "\r\n", fdbufs[BACKEND].outlen);
+        if (curline_len == -1) {
+            curline_len = 0;
+            return -1; // we didn't find a newline, so there must not be a line to process
+        }
+        curline_len += memspn(start+curline_len, "\r\n", fdbufs[BACKEND].outlen - curline_len);
+    } while (curline_len <= 2); // while the line is blank
+
+    return total;
+}
+
+size_t
+handle_resp(int fd)
+{
+    fprintf(stderr, "%s start\n", __func__);
+    char *start = fdbufs[BACKEND].out;
     enum status status = 0;
 
-    /* ignore lines without content */
-    if (memcmp(start, "\n", 1) == 0)
-        return 1;
-    else if (memcmp(start, "\r\n", 2) == 0)
-        return 2;
-
-    ptr = memchr(fdbufs[idx].out, '\n', fdbufs[idx].outlen);
-    if (ptr == NULL)
+    if (nextline() < 0)
         return 0;
-
-    lprint(start, ptr - start);
-
-    size_t length = 1 + ptr - fdbufs[idx].out;
 
     if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
         status = STATUS_OK;
@@ -239,19 +276,23 @@ handle_resp(int fd, int idx)
     } else if (strncmp(start, "+CLIP", sizeof("+CLIP") - 1) == 0) {
         fprintf(stderr, "got +CLIP\n");
 
-        send_clip(start, ptr - start);
+        send_clip(start, curline_len);
     } else if (strncmp(start, "+COLP", sizeof("+COLP") - 1) == 0) {
         fprintf(stderr, "got +COLP\n");
 
-        send_colp(start, ptr - start);
+        send_colp(start, curline_len);
+    } else if (strncmp(start, "+CMT", sizeof("+CMT") - 1) == 0) {
+        fprintf(stderr, "got +CMT\n");
+
+        process_cmt(start, curline_len);
     }
 
 
     if (status && fd > 0)
         send_status(fd, status);
 
-    fprintf(stderr, "%s: %.*s\n", __func__, length, start);
-    return length;
+    fprintf(stderr, "%s: %.*s\n", __func__, curline_len, start);
+    return curline_len;
 }
 
 ssize_t
@@ -498,15 +539,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        while (fdbufs[BACKEND].outlen) {
-            ret = handle_resp(fds[cmd.index].fd, BACKEND);
-            if (ret == 0)
-                break;
-
-            memmove(fdbufs[BACKEND].out, fdbufs[BACKEND].out + ret, BUFSIZE - ret);
-            fdbufs[BACKEND].outlen -= ret;
-            fdbufs[BACKEND].outptr -= ret;
-        }
+        while (handle_resp(fds[cmd.index].fd));
 
         /* send next command to modem */
         if (fds[BACKEND].revents & POLLOUT) {
