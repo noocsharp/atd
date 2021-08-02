@@ -21,11 +21,14 @@ int main() {
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
     struct pollfd fds[FDCOUNT];
 
+    bool anotherline = false;
+    char tmp[BUFSIZE];
     char tosock[BUFSIZE];
     char fromsock[BUFSIZE];
     char *fromoff = fromsock;
     char *tooff = tosock;
 
+    ssize_t tmpcount;
     ssize_t tocount;
     ssize_t fromcount;
 
@@ -73,11 +76,28 @@ int main() {
             write(STDOUT, fromsock, ret);
         }
 
+        int ret;
         if (fds[SOCKFD].revents & POLLOUT) {
             fprintf(stderr, "in SOCKFD POLLOUT: %d\n", tocount);
-            int ret = write(fds[SOCKFD].fd, tosock, tocount);
+            if (tmpcount) {
+            	fprintf(stderr, "tmpcount!\n");
+	            for (int i = 0; i < tocount; i++) {
+	                fprintf(stderr, "%x ", tmp[i]);
+	            }
+                ret = write(fds[SOCKFD].fd, tmp, tmpcount);
+	            if (ret == -1) {
+	                fprintf(stderr, "failed to write to socket\n");
+	                break;
+	            }
+	            tmpcount -= ret;
+            }
+
+            if (tmpcount)
+                continue;
+
+            ret = write(fds[SOCKFD].fd, tosock, tocount);
             if (ret == -1) {
-                fprintf(stderr, "failed to read from socket\n");
+                fprintf(stderr, "failed to write to socket\n");
                 break;
             }
             tocount -= ret;
@@ -103,6 +123,16 @@ int main() {
                 tosock[ret+1] = '\0';
                 tocount = ret + 1;
             } 
+
+            if (memcmp(tosock, "+CMT:", sizeof("+CMT:") - 1) == 0) {
+                memcpy(tmp, tosock, ret);
+                tmpcount = ret;
+                anotherline = 1;
+                continue;
+            }
+
+            if (anotherline)
+                anotherline = 0;
 
             for (int i = 0; i < tocount; i++) {
                 fprintf(stderr, "%x ", tosock[i]);
