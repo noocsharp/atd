@@ -353,6 +353,7 @@ send_command(int idx, enum atcmd atcmd, union atdata atdata)
     fprintf(stderr, "send command: %d\n", atcmd);
     if (atcmd == ATD) {
         ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd], atdata.dial.num);
+        free(atdata.dial.num);
     } else {
         ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd]);
     }
