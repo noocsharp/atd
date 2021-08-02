@@ -14,6 +14,7 @@
 
 #include "atd.h"
 #include "encdec.h"
+#include "pdu.h"
 #include "util.h"
 #include "queue.h"
 
@@ -36,6 +37,8 @@
 #define MAX_FDS 16
 
 #define BUFSIZE 256
+
+int nextline();
 
 int curline_len;
 
@@ -170,6 +173,27 @@ send_colp(char *start, size_t len)
         return -1;
 
     return send_call_status(CALL_ANSWERED, number);
+}
+
+int
+process_cmt(char *start, size_t len)
+{
+    char pdubuf[1024];
+    struct pdu_msg pdu_msg;
+    unsigned int pdulen;
+    int ret = sscanf(start, "+CMT: ,%u", &pdulen);
+    if (ret != 1)
+        return -1;
+
+    ret = nextline();
+    if (ret == -1)
+        return -1;
+    fprintf(stderr, "nextline len: %d\n", curline_len - 2);
+
+    memcpy(pdubuf, fdbufs[BACKEND].out, curline_len - 2);
+    pdubuf[curline_len - 2] = 0;
+    decode_pdu(&pdu_msg, pdubuf);
+    fprintf(stderr, "message from %s: %s\n", pdu_msg.d.d.sender.number, pdu_msg.d.d.msg.data);
 }
 
 int
