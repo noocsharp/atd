@@ -386,7 +386,7 @@ int main(int argc, char *argv[])
         .sun_family = AF_UNIX,
         .sun_path = "/tmp/atsim",
     };
-    struct command cmd;
+    struct command cmd = { 0 };
     ssize_t ret = 0;
     sigset_t mask;
     char *next;
