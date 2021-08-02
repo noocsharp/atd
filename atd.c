@@ -489,14 +489,18 @@ int main(int argc, char *argv[])
     for (int i = 0; i < sizeof(startup) / sizeof(startup[0]); i++) {
         fprintf(stderr, "atd startup: %s, %i\n", startup[i], i);
         ret = xwrite(fds[BACKEND].fd, startup[i], strlen(startup[i]));
-        if (ret == -1)
+        if (ret == -1) {
+            warn("xwrite failed");
             goto error;
+        }
 
         ret = read(fds[BACKEND].fd, startupresp, sizeof(startupresp));
-        if (ret == -1)
+        if (ret == -1) {
+            warn("xread failed");
             goto error;
+        }
 
-        fprintf(stderr, startupresp);
+        fprintf(stderr, "startupresp %d: %.*s\n", ret, ret, startupresp);
         memset(startupresp, 0, sizeof(startupresp));
     }
 
