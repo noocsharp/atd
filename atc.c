@@ -28,6 +28,8 @@ main(int argc, char *argv[])
         cmd = CMD_HANGUP;
     } else if (strcmp(argv[1], "callevents") == 0) {
         cmd = CMD_CALL_EVENTS;
+    } else if (strcmp(argv[1], "submit") == 0) {
+        cmd = CMD_SUBMIT;
     }
 
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -58,6 +60,8 @@ main(int argc, char *argv[])
     case CMD_CALL_EVENTS:
         atd_cmd_call_events(sock);
         break;
+    case CMD_SUBMIT:
+        atd_cmd_submit(sock, argv[2], argv[3]);
     }
 
     char op;

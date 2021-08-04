@@ -27,11 +27,12 @@ dec_str(char *in, char **out)
     len = dec_short(in);
     ptr += 2;
 
-    *out = malloc(len);
+    *out = malloc(len+1);
     if (!(*out))
         return -1;
 
     memcpy(*out, ptr, len);
+    out[len] = 0;
     return len + 2;
 }
 
@@ -106,6 +107,18 @@ atd_cmd_call_events(int fd)
 {
     char buf = CMD_CALL_EVENTS;
     return xwrite(fd, &buf, 1);
+}
+
+int
+atd_cmd_submit(int fd, char *num, char *msg)
+{
+    size_t len = strlen(num) + strlen(msg) + 5; // 5 = op + length + length
+    char buf[len];
+    buf[0] = CMD_SUBMIT;
+    enc_str(buf + 1, num);
+    enc_str(buf + 3 + strlen(num), msg);
+
+    return xwrite(fd, buf, len);
 }
 
 int
