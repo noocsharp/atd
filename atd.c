@@ -42,7 +42,7 @@ int nextline();
 
 int curline_len;
 
-char *startup[] = { "AT+CLIP=1\r", "AT+COLP=1\r", "AT+CNMI=2,2,0,1,0" };
+char *startup[] = { "AT+CLIP=1\r", "AT+COLP=1\r", "AT+CNMI=2,2,0,1,0\r" };
 
 struct command_args cmddata[] = {
     [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
