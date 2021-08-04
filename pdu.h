@@ -57,3 +57,4 @@ struct pdu_msg {
 
 int encode_pdu(char *dest, char *number, char *message);
 int decode_pdu(struct pdu_msg *pdu_msg, char *raw);
+char *htoa(char *str, char val);

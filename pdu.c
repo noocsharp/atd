@@ -42,6 +42,23 @@ atoh(char hex)
 	return hex - 'A' + 0xA;
 }
 
+char *htoa(char *str, char val)
+{
+	*str = '0' + ((val >> 4) & 0xf);
+	if (*str > '9')
+		*str = 'A' - 0xA + ((val >> 4) & 0xf);
+
+	str++;
+
+	*str = '0' + (val & 0xf);
+	if (*str > '9')
+		*str = 'A' - 0xA + (val & 0xf);
+
+	str++;
+
+	return str;
+}
+
 char
 pairtohex(char *ptr)
 {
