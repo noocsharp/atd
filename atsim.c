@@ -73,6 +73,14 @@ int main() {
                 fprintf(stderr, "failed to read from socket\n");
                 break;
             }
+
+            if (fromsock[ret-1] == '\x1a') {
+                fromsock[ret-1] = '\n';
+                char *place = memchr(fromsock, '\r', ret-2);
+                if (*place)
+	                *place = '\n';
+            } 
+
             write(STDOUT, fromsock, ret);
         }
 
