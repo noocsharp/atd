@@ -55,6 +55,5 @@ struct pdu_msg {
 	} d;
 };
 
-int decode_gsm(char *dest, char *src, size_t len);
-int encode_gsm(char *dest, char *src, size_t len);
+int encode_pdu(char *dest, char *number, char *message);
 int decode_pdu(struct pdu_msg *pdu_msg, char *raw);

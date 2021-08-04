@@ -487,10 +487,15 @@ pdu_encode_semioctet(unsigned char *dest, const char *str)
 	while (*str) {
 		char digit = *str - '0';
 
-		if (lower)
-			dest[len] = 0xf0 | digit;
-		else
-			dest[len++] &= (digit << 4) | 0xf;
+		if (dest) {
+			if (lower) {
+				dest[len] = 0xf0 | digit;
+			} else {
+				dest[len++] &= (digit << 4) | 0xf;
+			}
+		} else {
+			len += !lower;
+		}
 
 		lower = !lower;
 		str++;
@@ -507,7 +512,9 @@ pdu_encode_number(unsigned char *dest, const char *str, bool smsc)
 	int len = 0;
 	int i;
 
-	dest[len++] = 0;
+	if (dest)
+		dest[len] = 0;
+	len++;
 	if (*str == '+') {
 		str++;
 		format = 0x91;
@@ -526,16 +533,20 @@ pdu_encode_number(unsigned char *dest, const char *str, bool smsc)
 	if (ascii)
 		format |= 0x40;
 
-	dest[len++] = format;
+	if (dest)
+		dest[len] = format;
+	len++;
 	if (!ascii)
-		len += pdu_encode_semioctet(&dest[len], str);
+		len += pdu_encode_semioctet(dest ? &dest[len] : NULL, str);
 	else
-		len += pdu_encode_7bit_str(&dest[len], str);
+		len += pdu_encode_7bit_str(dest ? &dest[len] : NULL, str);
 
-	if (smsc)
-		dest[0] = len - 1;
-	else
-		dest[0] = strlen(str);
+	if (dest) {
+		if (smsc)
+			dest[0] = len - 1;
+		else
+			dest[0] = strlen(str);
+	}
 
 	return len;
 }
@@ -543,31 +554,38 @@ pdu_encode_number(unsigned char *dest, const char *str, bool smsc)
 int
 encode_pdu(char *dest, char *number, char *message)
 {
+	int len = 0;
+
 	char *ptr = dest;
 	// may want to set bit 6 for multi-part message
-	*ptr = 1;
-	ptr++;
+	if (dest)
+		dest[len] = 1;
+	len++;
 
 	// message reference
-	*ptr = 0;
-	ptr++;
+	if (dest)
+		dest[len] = 0;
+	len++;
 
-	ptr += pdu_encode_number(ptr, number, 0);
+	len += pdu_encode_number(dest ? &dest[len] : NULL, number, 0);
 
 	// PID
-	*ptr = 0;
-	ptr++;
+	if (dest)
+		dest[len] = 0;
+	len++;
 
 	// DCS - needs to be determined from message - XXX don't assume GSM
-	*ptr = 0;
-	ptr++;
+	if (dest)
+		dest[len] = 0;
+	len++;
 
 	// UDL - user data length - for now we just assume it is the number of octets in the message
-	*ptr = strlen(message);
-	ptr++;
+	if (dest)
+		dest[len] = strlen(message);
+	len++;
 
 	// User Data
-	ptr += pdu_encode_7bit_str(ptr, message);
+	len += pdu_encode_7bit_str(dest ? &dest[len] : NULL, message);
 
-	return ptr - dest;
+	return len;
 }
