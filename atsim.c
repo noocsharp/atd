@@ -25,12 +25,13 @@ int main() {
     char tmp[BUFSIZE];
     char tosock[BUFSIZE];
     char fromsock[BUFSIZE];
+    char fromin[BUFSIZE];
     char *fromoff = fromsock;
     char *tooff = tosock;
 
     ssize_t tmpcount;
-    ssize_t tocount;
-    ssize_t fromcount;
+    ssize_t tocount = 0;
+    ssize_t fromcount = 0;
 
     if (sock == -1) {
         fprintf(stderr, "failed to create socket\n");
@@ -74,35 +75,12 @@ int main() {
                 break;
             }
 
-            if (fromsock[ret-1] == '\x1a') {
-                fromsock[ret-1] = '\n';
-                char *place = memchr(fromsock, '\r', ret-2);
-                if (*place)
-	                *place = '\n';
-            } 
-
             write(STDOUT, fromsock, ret);
         }
 
         int ret;
         if (fds[SOCKFD].revents & POLLOUT) {
             fprintf(stderr, "in SOCKFD POLLOUT: %d\n", tocount);
-            if (tmpcount) {
-            	fprintf(stderr, "tmpcount!\n");
-	            for (int i = 0; i < tocount; i++) {
-	                fprintf(stderr, "%x ", tmp[i]);
-	            }
-                ret = write(fds[SOCKFD].fd, tmp, tmpcount);
-	            if (ret == -1) {
-	                fprintf(stderr, "failed to write to socket\n");
-	                break;
-	            }
-	            tmpcount -= ret;
-            }
-
-            if (tmpcount)
-                continue;
-
             ret = write(fds[SOCKFD].fd, tosock, tocount);
             if (ret == -1) {
                 fprintf(stderr, "failed to write to socket\n");
@@ -119,33 +97,49 @@ int main() {
 
         if (fds[STDIN].revents & POLLIN) {
             fprintf(stderr, "in STDIN POLLIN\n");
-            int ret = read(fds[STDIN].fd, tosock, BUFSIZE);
+            int ret = read(fds[STDIN].fd, fromin, BUFSIZE);
             if (ret == -1) {
                 fprintf(stderr, "failed to read from stdin\n");
                 break;
             }
 
-            if (tosock[ret-1] == '\n') {
-                tosock[ret-1] = '\r';
-                tosock[ret] = '\n';
-                tosock[ret+1] = '\0';
-                tocount = ret + 1;
-            } 
+			// remove ending newline
+			fromin[ret-1] = '\0';
+			ret -= 1;
 
-            if (memcmp(tosock, "+CMT:", sizeof("+CMT:") - 1) == 0) {
-                memcpy(tmp, tosock, ret);
-                tmpcount = ret;
-                anotherline = 1;
-                continue;
-            }
+			// convert escapes and special characters
+			int idx = 0;
+			for (int i = 0; i < ret; i++) {
+				if (fromin[i] == '\\') {
+					i++;
+					switch (fromin[i]) {
+					case 'n':
+						tosock[idx] = '\n';
+						break;
+					case 'r':
+						tosock[idx] = '\r';
+						break;
+					case 'z':
+						tosock[idx] = '\x1a';
+						break;
+					default:
+						tosock[idx] = '\\';
+						break;
+					}
+				} else {
+					tosock[tocount+idx] = fromin[i];
+				}
 
-            if (anotherline)
-                anotherline = 0;
+				idx++;
+			}
+
+			tocount += idx;
 
             for (int i = 0; i < tocount; i++) {
                 fprintf(stderr, "%x ", tosock[i]);
             }
-            tooff = fromsock;
+
+            tooff = tosock;
             fds[SOCKFD].events |= POLLOUT;
         }
     }
