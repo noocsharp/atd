@@ -48,6 +48,7 @@ struct command_args cmddata[] = {
     [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
     [CMD_ANSWER] = { ATA, { TYPE_NONE} },
     [CMD_HANGUP] = { ATH, { TYPE_NONE} },
+    [CMD_SUBMIT] = { ATCMGS, { TYPE_NONE} },
 };
 
 char *atcmds[] = {
@@ -55,6 +56,7 @@ char *atcmds[] = {
     [ATA] = "ATA\r",
     [ATH] = "ATH\r",
     [CLCC] = "AT+CLCC\r",
+    [ATCMGS] = "AT+CMGS=%d\r", // requires extra PDU data to be sent
 };
 
 char *argv0;
@@ -86,6 +88,7 @@ ssize_t cmdadd(int index) {
     struct command cmd = {index, CMD_NONE, NULL};
     char *ptr = fdbufs[index].out;
     size_t count = 0;
+    char *num, *msg, *raw;
 
     if (cmdq.count == QUEUE_SIZE)
         return -1;
@@ -111,6 +114,38 @@ ssize_t cmdadd(int index) {
             calld = index;
         goto end;
         break;
+    case CMD_SUBMIT:
+        count = dec_str(ptr, &num);
+        if (count == -1)
+            return -1;
+
+        ptr += count;
+        count = dec_str(ptr, &msg);
+        if (count == -1)
+            return -1;
+
+        count = encode_pdu(NULL, num, msg);
+        raw = malloc(count);
+        if (!raw)
+            return -1;
+
+        encode_pdu(raw, num, msg);
+        free(num);
+        free(msg);
+
+        cmd.data.submit.len = count;
+        cmd.data.submit.pdu = malloc(2*count + 1);
+        if (!cmd.data.submit.pdu)
+            return -1;
+
+        for (int i = 0; i < count; i++) {
+            htoa(&cmd.data.submit.pdu[2*i], raw[i]);
+        }
+        cmd.data.submit.pdu[2*count] = 0;
+        free(raw);
+
+        fprintf(stderr, "received submit to number %s: %s\n", num, cmd.data.submit.pdu);
+        break;
     default:
         fprintf(stderr, "got code: %d\n", cmd.op);
         return -2;
@@ -123,6 +158,34 @@ ssize_t cmdadd(int index) {
 end:
     return count + 1;
 }
+
+ssize_t
+fdbuf_write(int idx)
+{
+    int wr = write(fds[idx].fd, &fdbufs[idx].in, fdbufs[idx].inlen);
+    if (wr == -1)
+        return -1;
+
+    fdbufs[idx].inlen -= wr;
+    fdbufs[idx].inptr -= wr;
+    memmove(fdbufs[idx].in, fdbufs[idx].in + wr, BUFSIZE - wr);
+
+    return wr;
+}
+
+ssize_t
+fdbuf_read(int idx)
+{
+    int r = read(fds[idx].fd, fdbufs[idx].outptr, BUFSIZE - fdbufs[idx].outlen);
+    if (r == -1)
+        return -1;
+
+    fdbufs[idx].outlen += r;
+    fdbufs[idx].outptr += r;
+
+    return r;
+}
+
 
 int
 send_status(int fd, enum status status)
@@ -233,6 +296,47 @@ memspn(const char *mem, const char *valid, int n)
 }
 
 int
+atcmgs2()
+{
+    char *loc;
+    int ret;
+    size_t before, after;
+
+    /* this shouldn't be possible */
+    if (!(loc = memchr(fdbufs[BACKEND].out, '>', fdbufs[BACKEND].outlen))) {
+        fprintf(stderr, "%s: prompt not found\n", __func__);
+        // TODO send \x1a
+        return -1;
+    }
+
+    before = loc - fdbufs[BACKEND].out;
+    after = fdbufs[BACKEND].out + fdbufs[BACKEND].outlen - loc;
+
+    ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, "%s\x1a", currentcmd.data.submit.pdu);
+
+    fdbufs[BACKEND].inptr = fdbufs[BACKEND].in;
+    if (ret > BUFSIZE) {
+       fdbufs[BACKEND].in[0] = '\x1a'; // \x1a will terminate read for a PDU
+       fdbufs[BACKEND].inlen = 1;
+       fprintf(stderr, "%s: PDU too long!\n", __func__);
+    } else {
+        fdbufs[BACKEND].inlen = ret;
+    }
+
+    ret = fdbuf_write(BACKEND);
+
+    // the prompt will be "> ", so remove the prompt from the buffer
+    memmove(fdbufs[BACKEND].out + before, loc + 2, after);
+    fdbufs[BACKEND].outlen -= 2;
+    fdbufs[BACKEND].outptr -= 2;
+
+    free(currentcmd.data.submit.pdu);
+    currentcmd.data.submit.pdu = NULL;
+
+    return ret;
+}
+
+int
 nextline()
 {
     fprintf(stderr, "%s start\n", __func__);
@@ -261,6 +365,15 @@ handle_resp(int fd)
     fprintf(stderr, "%s start\n", __func__);
     char *start = fdbufs[BACKEND].out;
     enum status status = 0;
+
+    // this must be put before nextline, because a prompt doesn't end
+    // in a newline, so nextline won't interpret it as a line
+    if (currentatcmd == ATCMGS && currentcmd.data.submit.pdu) {
+        if (atcmgs2() < 0)
+            return -1;
+
+        return 2;
+    }
 
     if (nextline() < 0)
         return 0;
@@ -319,33 +432,6 @@ handle_resp(int fd)
     return curline_len;
 }
 
-ssize_t
-fdbuf_write(int idx)
-{
-    int wr = write(fds[idx].fd, &fdbufs[idx].in, fdbufs[idx].inlen);
-    if (wr == -1)
-        return -1;
-
-    fdbufs[idx].inlen -= wr;
-    fdbufs[idx].inptr -= wr;
-    memmove(fdbufs[idx].in, fdbufs[idx].in + wr, BUFSIZE - wr);
-
-    return wr;
-}
-
-ssize_t
-fdbuf_read(int idx)
-{
-    int r = read(fds[idx].fd, fdbufs[idx].outptr, BUFSIZE - fdbufs[idx].outlen);
-    if (r == -1)
-        return -1;
-
-    fdbufs[idx].outlen += r;
-    fdbufs[idx].outptr += r;
-
-    return r;
-}
-
 bool
 send_command(int idx, enum atcmd atcmd, union atdata atdata)
 {
@@ -354,6 +440,8 @@ send_command(int idx, enum atcmd atcmd, union atdata atdata)
     if (atcmd == ATD) {
         ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd], atdata.dial.num);
         free(atdata.dial.num);
+    } else if (atcmd == ATCMGS) {
+        ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd], atdata.submit.len);
     } else {
         ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd]);
     }
@@ -369,6 +457,7 @@ send_command(int idx, enum atcmd atcmd, union atdata atdata)
         warn("failed to write to backend!");
         return false;
     }
+
     active_command = true;
     currentatcmd = atcmd;
     return true;
@@ -568,7 +657,12 @@ int main(int argc, char *argv[])
             }
         }
 
-        while (handle_resp(fds[cmd.index].fd));
+        while ((ret = handle_resp(fds[cmd.index].fd)) != 0) {
+            if (ret < 0) {
+                fprintf(stderr, "atd: failure in atcmgs\n");
+                goto error;
+            }
+        }
 
         /* send next command to modem */
         if (fds[BACKEND].revents & POLLOUT) {

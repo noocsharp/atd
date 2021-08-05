@@ -14,6 +14,7 @@ enum ops {
     CMD_ANSWER,
     CMD_HANGUP,
     CMD_CALL_EVENTS,
+    CMD_SUBMIT,
 };
 
 enum callstatus {
@@ -38,12 +39,17 @@ enum atcmd {
 	ATA,
 	ATH,
 	CLCC,
+	ATCMGS,
 };
 
 union atdata {
 	struct {
 		char *num;
 	} dial;
+	struct {
+		char len;
+		char *pdu;
+	} submit;
 };
 
 struct command {
