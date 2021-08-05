@@ -82,8 +82,8 @@ struct pollfd fds[MAX_FDS];
 struct call calls[MAX_CALLS];
 
 /* add one command to queue, returns the number of bytes intepreted if the
- * command was validated and added successfully, -1 if the queue is full, -2 if
- * the command is invalid but terminated */
+ * command was validated and added successfully, -1 if the queue is full or we
+ * run out of memory, and -2 if the command is invalid but terminated */
 ssize_t cmdadd(int index) {
     struct command cmd = {index, CMD_NONE, NULL};
     char *ptr = fdbufs[index].out;
@@ -100,7 +100,7 @@ ssize_t cmdadd(int index) {
         if (count == -1)
             return -1;
 
-        fprintf(stderr, "received dial with number %*.*s\n", count, count, cmd.data.dial.num);
+        fprintf(stderr, "received dial with number %s\n", cmd.data.dial.num);
         break;
     case CMD_ANSWER:
         fprintf(stderr, "received answer\n");
@@ -339,7 +339,7 @@ atcmgs2()
 int
 nextline()
 {
-    fprintf(stderr, "%s start\n", __func__);
+    fprintf(stderr, "%s start: curline_len = %d\n", __func__, curline_len);
     char *start = fdbufs[BACKEND].out;
     int total = 0, ret;
 
@@ -424,7 +424,6 @@ handle_resp(int fd)
         process_cmt(start, curline_len);
     }
 
-
     if (status && fd > 0)
         send_status(fd, status);
 
@@ -449,6 +448,7 @@ send_command(int idx, enum atcmd atcmd, union atdata atdata)
         warn("AT command too long!");
         return false;
     }
+    fprintf(stderr, "send command: %.*s\n", ret, fdbufs[idx].in);
     fdbufs[idx].inptr = fdbufs[idx].in;
     fdbufs[idx].inlen = ret;
 
