@@ -159,6 +159,20 @@ end:
     return count + 1;
 }
 
+int
+lprint(char *buf, size_t len)
+{
+    for (int i = 0; i < len; i++) {
+        if (buf[i] == '\n') {
+            fputs("<LF>", stderr);
+        } else if (buf[i] == '\r') {
+            fputs("<CR>", stderr);
+        } else {
+            putc(buf[i], stderr);
+        }
+    }
+}
+
 ssize_t
 fdbuf_write(int idx)
 {
@@ -257,20 +271,6 @@ process_cmt(char *start, size_t len)
     pdubuf[curline_len - 2] = 0;
     decode_pdu(&pdu_msg, pdubuf);
     fprintf(stderr, "message from %s: %s\n", pdu_msg.d.d.sender.number, pdu_msg.d.d.msg.data);
-}
-
-int
-lprint(char *buf, size_t len)
-{
-    for (int i = 0; i < len; i++) {
-        if (buf[i] == '\n') {
-            puts("<LF>");
-        } else if (buf[i] == '\r') {
-            puts("<CR>");
-        } else {
-            putchar(buf[i]);
-        }
-    }
 }
 
 static int
