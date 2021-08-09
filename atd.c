@@ -571,6 +571,11 @@ int main(int argc, char *argv[])
         warn("failed to connect to tty:");
         goto error;
     }
+
+    if (!setup_modem_tty(backsock)) {
+        warn("failed to configure tty:");
+        goto error;
+    }
 #endif
 
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
