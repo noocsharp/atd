@@ -24,11 +24,12 @@
 #define POLLADD(fd, arg) fd.events |= (arg)
 #define POLLDROP(fd, arg) fd.events &= ~(arg)
 
+#define LENGTH(x) (sizeof(x) / sizeof(x[0]))
+
 #define QUEUE_MAX 100
 #define STDOUT 0
 #define STDIN 1
 #define STDERR 2
-
 
 #define LISTENER 3
 #define BACKEND 4
@@ -40,16 +41,16 @@
 
 int nextline();
 
-int curline_len;
+int linelen;
 
-char *startup[] = { "AT+CLIP=1\r", "AT+COLP=1\r", "AT+CNMI=2,2,0,1,0\r" };
-int startup_idx;
+char *startup[] = { "AT+CLIP=1\r", "AT+COLP=1\r", "AT+CNMI=2,2,0,1,0\r", NULL };
+char **curstartup = startup;
 
 struct command_args cmddata[] = {
-    [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
-    [CMD_ANSWER] = { ATA, { TYPE_NONE} },
-    [CMD_HANGUP] = { ATH, { TYPE_NONE} },
-    [CMD_SUBMIT] = { ATCMGS, { TYPE_NONE} },
+    [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE } },
+    [CMD_ANSWER] = { ATA, { TYPE_NONE } },
+    [CMD_HANGUP] = { ATH, { TYPE_NONE } },
+    [CMD_SUBMIT] = { ATCMGS, { TYPE_NONE } },
 };
 
 char *atcmds[] = {
@@ -75,9 +76,9 @@ struct command cmd;
 int cmd_progress;
 bool active_command = false;
 enum atcmd currentatcmd;
-int calld = -1;
+int calld = -1, smsd = -1;
 
-struct fdbuf fdbufs[MAX_FDS] = {0};
+struct fdbuf fdbufs[MAX_FDS];
 struct pollfd fds[MAX_FDS];
 
 struct call calls[MAX_CALLS];
@@ -86,7 +87,7 @@ struct call calls[MAX_CALLS];
  * command was validated and added successfully, -1 if the queue is full or we
  * run out of memory, and -2 if the command is invalid but terminated */
 ssize_t cmdadd(int index) {
-    struct command cmd = {index, CMD_NONE, NULL};
+    struct command cmd = {index, CMD_NONE};
     char *ptr = fdbufs[index].out;
     size_t count = 0;
     char *num, *msg, *raw;
@@ -113,6 +114,12 @@ ssize_t cmdadd(int index) {
         fprintf(stderr, "received request call events\n");
         if (calld == -1)
             calld = index;
+        goto end;
+        break;
+    case CMD_SMS_EVENTS:
+        fprintf(stderr, "received request sms events\n");
+        if (smsd == -1)
+            smsd = index;
         goto end;
         break;
     case CMD_SUBMIT:
@@ -160,7 +167,7 @@ end:
     return count + 1;
 }
 
-int
+void
 lprint(char *buf, size_t len)
 {
     for (int i = 0; i < len; i++) {
@@ -266,12 +273,14 @@ process_cmt(char *start, size_t len)
     ret = nextline();
     if (ret == -1)
         return -1;
-    fprintf(stderr, "nextline len: %d\n", curline_len - 2);
+    fprintf(stderr, "nextline len: %d\n", linelen - 2);
 
-    memcpy(pdubuf, fdbufs[BACKEND].out, curline_len - 2);
-    pdubuf[curline_len - 2] = 0;
+    memcpy(pdubuf, fdbufs[BACKEND].out, linelen - 2);
+    pdubuf[linelen - 2] = 0;
     decode_pdu(&pdu_msg, pdubuf);
-    fprintf(stderr, "message from %s: %s\n", pdu_msg.d.d.sender.number, pdu_msg.d.d.msg.data);
+
+	if (smsd > 0)
+	    return atd_status_delivered(fds[smsd].fd, pdu_msg.d.d.sender.number, pdu_msg.d.d.msg.data);
 }
 
 static int
@@ -340,22 +349,22 @@ atcmgs2()
 int
 nextline()
 {
-    fprintf(stderr, "%s start: curline_len = %d\n", __func__, curline_len);
+    fprintf(stderr, "%s start: linelen = %d\n", __func__, linelen);
     char *start = fdbufs[BACKEND].out;
-    int total = 0, ret;
+    int total = 0;
 
     do {
-        total += curline_len;
-        memmove(start, fdbufs[BACKEND].out + curline_len, fdbufs[BACKEND].outlen - curline_len);
-        fdbufs[BACKEND].outlen -= curline_len;
-        fdbufs[BACKEND].outptr -= curline_len;
-        curline_len = memcspn(start, "\r\n", fdbufs[BACKEND].outlen);
-        if (curline_len == -1) {
-            curline_len = 0;
+        total += linelen;
+        memmove(start, fdbufs[BACKEND].out + linelen, fdbufs[BACKEND].outlen - linelen);
+        fdbufs[BACKEND].outlen -= linelen;
+        fdbufs[BACKEND].outptr -= linelen;
+        linelen = memcspn(start, "\r\n", fdbufs[BACKEND].outlen);
+        if (linelen == -1) {
+            linelen = 0;
             return -1; // we didn't find a newline, so there must not be a line to process
         }
-        curline_len += memspn(start+curline_len, "\r\n", fdbufs[BACKEND].outlen - curline_len);
-    } while (curline_len <= 2); // while the line is blank
+        linelen += memspn(start+linelen, "\r\n", fdbufs[BACKEND].outlen - linelen);
+    } while (linelen <= 2); // while the line is blank
 
     return total;
 }
@@ -382,8 +391,8 @@ handle_resp(int fd)
     if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
         status = STATUS_OK;
         active_command = false;
-        if (startup_idx < sizeof(startup) / sizeof(startup[0]))
-            startup_idx++;
+        if (*curstartup)
+            curstartup++;
 
         if (currentatcmd == ATD) {
             if (send_call_status(CALL_DIALING, cmd.data.dial.num) < 0)
@@ -417,29 +426,29 @@ handle_resp(int fd)
     } else if (strncmp(start, "+CLIP", sizeof("+CLIP") - 1) == 0) {
         fprintf(stderr, "got +CLIP\n");
 
-        send_clip(start, curline_len);
+        send_clip(start, linelen);
     } else if (strncmp(start, "+COLP", sizeof("+COLP") - 1) == 0) {
         fprintf(stderr, "got +COLP\n");
 
-        send_colp(start, curline_len);
+        send_colp(start, linelen);
     } else if (strncmp(start, "+CMT", sizeof("+CMT") - 1) == 0) {
         fprintf(stderr, "got +CMT\n");
 
-        process_cmt(start, curline_len);
+        process_cmt(start, linelen);
     }
 
     if (status && fd > 0)
         send_status(fd, status);
 
-    fprintf(stderr, "%s: %.*s\n", __func__, curline_len, start);
-    return curline_len;
+    fprintf(stderr, "%s: %.*s\n", __func__, linelen, start);
+    return linelen;
 }
 
 bool
 send_startup()
 {
-    ssize_t ret;
-    ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, startup[startup_idx]);
+    int ret;
+    ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, *curstartup);
     if (ret >= BUFSIZE) {
         warn("AT command too long!");
         return false;
@@ -462,7 +471,7 @@ send_startup()
 bool
 send_command(int idx, enum atcmd atcmd, union atdata atdata)
 {
-    ssize_t ret;
+    int ret;
     fprintf(stderr, "send command: %d\n", atcmd);
     if (atcmd == ATD) {
         ret = snprintf(fdbufs[idx].in, BUFSIZE, atcmds[atcmd], atdata.dial.num);
@@ -523,14 +532,8 @@ int main(int argc, char *argv[])
         .sun_family = AF_UNIX,
         .sun_path = ATD_SOCKET ,
     };
-
-    struct sockaddr_un backaddr = {
-        .sun_family = AF_UNIX,
-        .sun_path = "/tmp/atsim",
-    };
     ssize_t ret = 0;
     sigset_t mask;
-    char *next;
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
@@ -549,6 +552,11 @@ int main(int argc, char *argv[])
     int backsock;
 
 #ifdef DEBUG
+    struct sockaddr_un backaddr = {
+        .sun_family = AF_UNIX,
+        .sun_path = "/tmp/atsim",
+    };
+
     backsock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (backsock == -1) {
         warn("failed to create backend socket:");
@@ -606,7 +614,7 @@ int main(int argc, char *argv[])
     fds[SIGNALINT].events = POLLIN;
 
     while (true) {
-        if (poll(fds, sizeof(fds) / sizeof(fds[0]), -1) == -1) {
+        if (poll(fds, LENGTH(fds), -1) == -1) {
             warn("poll failed");
             break;
         }
@@ -629,6 +637,8 @@ int main(int argc, char *argv[])
                 fds[i].fd = -1;
                 if (i == calld)
                     calld = -1;
+                if (i == smsd)
+                    smsd = -1;
             } else if (fds[i].revents & POLLIN) {
                 if (fdbuf_read(i) == -1) {
                     warn("failed to read from fd %d:", i);
@@ -677,7 +687,7 @@ int main(int argc, char *argv[])
 
         /* send next command to modem */
         if (fds[BACKEND].revents & POLLOUT) {
-            if (startup_idx < sizeof(startup) / sizeof(startup[0])) {
+            if (*curstartup) {
                 if (!send_startup()) {
                     fprintf(stderr, "failed to send startup command!\n");
                     break;
@@ -719,7 +729,7 @@ int main(int argc, char *argv[])
 
         /* note that this doesn't take effect until the next poll cycle...
          * maybe this can be replaced with something more integrated? */
-        if ((cmdq.count || startup_idx < sizeof(startup) / sizeof(startup[0])) && !active_command)
+        if ((cmdq.count || *curstartup) && !active_command)
             POLLADD(fds[BACKEND], POLLOUT);
         else
             POLLDROP(fds[BACKEND], POLLOUT);
