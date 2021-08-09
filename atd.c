@@ -43,6 +43,7 @@ int nextline();
 int curline_len;
 
 char *startup[] = { "AT+CLIP=1\r", "AT+COLP=1\r", "AT+CNMI=2,2,0,1,0\r" };
+int startup_idx;
 
 struct command_args cmddata[] = {
     [CMD_DIAL] = { ATD, { TYPE_STRING, TYPE_NONE} },
@@ -381,6 +382,9 @@ handle_resp(int fd)
     if (strncmp(start, "OK", sizeof("OK") - 1) == 0) {
         status = STATUS_OK;
         active_command = false;
+        if (startup_idx < sizeof(startup) / sizeof(startup[0]))
+            startup_idx++;
+
         if (currentatcmd == ATD) {
             if (send_call_status(CALL_DIALING, currentcmd.data.dial.num) < 0)
                 fprintf(stderr, "failed to send call status\n");
@@ -429,6 +433,30 @@ handle_resp(int fd)
 
     fprintf(stderr, "%s: %.*s\n", __func__, curline_len, start);
     return curline_len;
+}
+
+bool
+send_startup()
+{
+    ssize_t ret;
+    ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, startup[startup_idx]);
+    if (ret >= BUFSIZE) {
+        warn("AT command too long!");
+        return false;
+    }
+
+    fprintf(stderr, "send startup: %.*s\n", ret, fdbufs[BACKEND].in);
+    fdbufs[BACKEND].inptr = fdbufs[BACKEND].in;
+    fdbufs[BACKEND].inlen = ret;
+
+    ret = fdbuf_write(BACKEND);
+    if (ret == -1) {
+        warn("failed to write to backend!");
+        return false;
+    }
+
+    active_command = true;
+    return true;
 }
 
 bool
@@ -568,31 +596,10 @@ int main(int argc, char *argv[])
     fds[LISTENER].fd = sock;
     fds[LISTENER].events = POLLIN;
     fds[BACKEND].fd = backsock;
-    fds[BACKEND].events = POLLIN;
+    fds[BACKEND].events = POLLIN | POLLOUT;
     fdbufs[BACKEND].outptr = fdbufs[BACKEND].out;
     fds[SIGNALINT].fd = sigintfd;
     fds[SIGNALINT].events = POLLIN;
-
-    char startupresp[256];
-
-    fprintf(stderr, "atd: %d startup commands\n", sizeof(startup) / sizeof(startup[0]));
-    for (int i = 0; i < sizeof(startup) / sizeof(startup[0]); i++) {
-        fprintf(stderr, "atd startup: %s, %i\n", startup[i], i);
-        ret = xwrite(fds[BACKEND].fd, startup[i], strlen(startup[i]));
-        if (ret == -1) {
-            warn("xwrite failed");
-            goto error;
-        }
-
-        ret = read(fds[BACKEND].fd, startupresp, sizeof(startupresp));
-        if (ret == -1) {
-            warn("xread failed");
-            goto error;
-        }
-
-        fprintf(stderr, "startupresp %d: %.*s\n", ret, ret, startupresp);
-        memset(startupresp, 0, sizeof(startupresp));
-    }
 
     while (true) {
         if (poll(fds, sizeof(fds) / sizeof(fds[0]), -1) == -1) {
@@ -666,20 +673,26 @@ int main(int argc, char *argv[])
 
         /* send next command to modem */
         if (fds[BACKEND].revents & POLLOUT) {
-            fprintf(stderr, "have a command!\n");
+            if (startup_idx < sizeof(startup) / sizeof(startup[0])) {
+                if (!send_startup()) {
+                    fprintf(stderr, "failed to send startup command!\n");
+                    break;
+                }
+            } else {
+                fprintf(stderr, "have a command!\n");
 
-            cmd = command_dequeue();
-            assert(cmd.op != CMD_NONE);
+                cmd = command_dequeue();
+                assert(cmd.op != CMD_NONE);
 
-            if (!send_command(BACKEND, cmddata[cmd.op].atcmd, cmd.data))
-                break;
+                if (!send_command(BACKEND, cmddata[cmd.op].atcmd, cmd.data))
+                    break;
 
-            currentcmd = cmd;
+                currentcmd = cmd;
 
-            /* don't write any more until we hear back */
-            if (fdbufs[BACKEND].inlen == 0) {
-                POLLDROP(fds[BACKEND], POLLOUT);
-                POLLADD(fds[BACKEND], POLLIN);
+                /* don't write any more until we hear back */
+                if (fdbufs[BACKEND].inlen == 0) {
+                    POLLDROP(fds[BACKEND], POLLOUT);
+                }
             }
         }
 
@@ -704,7 +717,7 @@ int main(int argc, char *argv[])
 
         /* note that this doesn't take effect until the next poll cycle...
          * maybe this can be replaced with something more integrated? */
-        if (cmdq.count && !active_command)
+        if ((cmdq.count || startup_idx < sizeof(startup) / sizeof(startup[0])) && !active_command)
             POLLADD(fds[BACKEND], POLLOUT);
         else
             POLLDROP(fds[BACKEND], POLLOUT);
