@@ -71,7 +71,7 @@ struct fdbuf {
     char *outptr;
 };
 
-struct command currentcmd;
+struct command cmd;
 int cmd_progress;
 bool active_command = false;
 enum atcmd currentatcmd;
@@ -313,7 +313,7 @@ atcmgs2()
     before = loc - fdbufs[BACKEND].out;
     after = fdbufs[BACKEND].out + fdbufs[BACKEND].outlen - loc;
 
-    ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, "%s\x1a", currentcmd.data.submit.pdu);
+    ret = snprintf(fdbufs[BACKEND].in, BUFSIZE, "%s\x1a", cmd.data.submit.pdu);
 
     fdbufs[BACKEND].inptr = fdbufs[BACKEND].in;
     if (ret > BUFSIZE) {
@@ -331,8 +331,8 @@ atcmgs2()
     fdbufs[BACKEND].outlen -= 2;
     fdbufs[BACKEND].outptr -= 2;
 
-    free(currentcmd.data.submit.pdu);
-    currentcmd.data.submit.pdu = NULL;
+    free(cmd.data.submit.pdu);
+    cmd.data.submit.pdu = NULL;
 
     return ret;
 }
@@ -369,7 +369,7 @@ handle_resp(int fd)
 
     // this must be put before nextline, because a prompt doesn't end
     // in a newline, so nextline won't interpret it as a line
-    if (currentatcmd == ATCMGS && currentcmd.data.submit.pdu) {
+    if (currentatcmd == ATCMGS && cmd.data.submit.pdu) {
         if (atcmgs2() < 0)
             return -1;
 
@@ -386,11 +386,11 @@ handle_resp(int fd)
             startup_idx++;
 
         if (currentatcmd == ATD) {
-            if (send_call_status(CALL_DIALING, currentcmd.data.dial.num) < 0)
+            if (send_call_status(CALL_DIALING, cmd.data.dial.num) < 0)
                 fprintf(stderr, "failed to send call status\n");
         }
 
-        currentcmd.op = CMD_NONE;
+        cmd.op = CMD_NONE;
         currentatcmd = ATNONE;
         fprintf(stderr, "got OK\n");
     } else if (strncmp(start, "ERROR", sizeof("ERROR") - 1) == 0) {
@@ -398,10 +398,10 @@ handle_resp(int fd)
         active_command = false;
         fprintf(stderr, "got ERROR\n");
     } else if (strncmp(start, "NO CARRIER", sizeof("NO CARRIER") - 1) == 0) {
-        if (currentcmd.op == CMD_ANSWER || currentcmd.op == CMD_DIAL) {
+        if (cmd.op == CMD_ANSWER || cmd.op == CMD_DIAL) {
             active_command = false;
             status = STATUS_ERROR;
-            currentcmd.op = CMD_NONE;
+            cmd.op = CMD_NONE;
             currentatcmd = ATNONE;
         }
 
@@ -528,7 +528,6 @@ int main(int argc, char *argv[])
         .sun_family = AF_UNIX,
         .sun_path = "/tmp/atsim",
     };
-    struct command cmd = { 0 };
     ssize_t ret = 0;
     sigset_t mask;
     char *next;
@@ -691,8 +690,6 @@ int main(int argc, char *argv[])
 
                 if (!send_command(BACKEND, cmddata[cmd.op].atcmd, cmd.data))
                     break;
-
-                currentcmd = cmd;
 
                 /* don't write any more until we hear back */
                 if (fdbufs[BACKEND].inlen == 0) {
