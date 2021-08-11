@@ -14,6 +14,7 @@ enum ops {
     CMD_ANSWER,
     CMD_HANGUP,
     CMD_CALL_EVENTS,
+    CMD_SMS_EVENTS,
     CMD_SUBMIT,
 };
 
@@ -31,6 +32,7 @@ enum status {
 	STATUS_OK = 1,
 	STATUS_ERROR,
 	STATUS_CALL,
+	STATUS_DELIVERED,
 };
 
 enum atcmd {
@@ -63,6 +65,10 @@ struct call {
 	char num[PHONE_NUMBER_MAX_LEN + 1];
 };
 
+struct sms {
+	char num[PHONE_NUMBER_MAX_LEN + 1];
+	char *msg;
+};
 
 /* should have at most 256 things */
 enum type {

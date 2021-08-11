@@ -110,11 +110,34 @@ atd_cmd_call_events(int fd)
 }
 
 int
+atd_cmd_sms_events(int fd)
+{
+    char buf = CMD_SMS_EVENTS;
+    return xwrite(fd, &buf, 1);
+}
+
+int
 atd_cmd_submit(int fd, char *num, char *msg)
 {
     size_t len = strlen(num) + strlen(msg) + 5; // 5 = op + length + length
     char buf[len];
     buf[0] = CMD_SUBMIT;
+    enc_str(buf + 1, num);
+    enc_str(buf + 3 + strlen(num), msg);
+
+    return xwrite(fd, buf, len);
+}
+
+int
+atd_status_delivered(int fd, char *num, char *msg)
+{
+	if (strlen(num) > PHONE_NUMBER_MAX_LEN)
+		return -1;
+
+    size_t len = strlen(num) + strlen(msg) + 5; // 5 = op + length + length
+    char buf[len];
+    buf[0] = STATUS_DELIVERED;
+
     enc_str(buf + 1, num);
     enc_str(buf + 3 + strlen(num), msg);
 
@@ -162,6 +185,45 @@ dec_call_status(int fd, struct call *call)
     	return 0;
 
     ret = xread(fd, call->num, len);
+    if (ret == -1)
+        return -1;
+
+    return 0;
+}
+
+int
+dec_sms_status(int fd, struct sms *sms)
+{
+    char status = 0;
+    unsigned short len = 0;
+    ssize_t ret;
+    char buf[PHONE_NUMBER_MAX_LEN];
+
+    ret = xread(fd, buf, 2);
+    if (ret == -1)
+        return -1;
+
+    len = dec_short(buf);
+    if (len > PHONE_NUMBER_MAX_LEN || len == 0)
+        return -1;
+
+    ret = xread(fd, sms->num, len);
+    if (ret == -1)
+        return -1;
+
+    ret = xread(fd, buf, 2);
+    if (ret == -1)
+        return -1;
+
+    len = dec_short(buf);
+    if (len == 0)
+        return 0; // XXX should we accept empty messages?
+
+    sms->msg = calloc(1, len);
+    if (sms->msg == NULL)
+    	return -1;
+
+    ret = xread(fd, sms->msg, len);
     if (ret == -1)
         return -1;
 
