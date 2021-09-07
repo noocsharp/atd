@@ -1,0 +1,8 @@
+# atd
+
+atd is the ofono/ModemManager replacement used in cactus, an oasis-based Linux
+system for the Pinephone. It exposes a Unix socket interface, and uses the
+modem's AT interface in order to make calls, send texts, and handle URCs (i.e.
+deal with incoming calls and texts).
+
+More documentation coming soon!
